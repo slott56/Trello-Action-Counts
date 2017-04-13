@@ -1,0 +1,19 @@
+/* SLott Legacy style */
+@import url(html4css1.css);
+
+/* Your customizations go here.  For example: */
+
+h1, h2, h3, h4, h5, h6, p.topic-title {
+  font-family: sans-serif }
+
+pre.literal-block {
+    background-color: #9CF;
+    }
+
+pre.code {
+    background-color: #EEE;
+    }
+
+div.document {
+    width: 8in;
+    }

@@ -1,0 +1,1110 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<meta name="generator" content="Docutils 0.12: http://docutils.sourceforge.net/" />
+<title>Compute Velocity -- Stop Starting, Start Finishing</title>
+<style type="text/css">
+
+/* SLott Legacy style */
+@import url(html4css1.css);
+
+/* Your customizations go here.  For example: */
+
+h1, h2, h3, h4, h5, h6, p.topic-title {
+  font-family: sans-serif }
+
+pre.literal-block {
+    background-color: #9CF;
+    }
+
+pre.code {
+    background-color: #EEE;
+    }
+
+div.document {
+    width: 8in;
+    }
+
+</style>
+</head>
+<body>
+<div class="document" id="compute-velocity-stop-starting-start-finishing">
+<h1 class="title">Compute Velocity -- Stop Starting, Start Finishing</h1>
+
+<!-- #!/usr/local/bin/python3.6 -->
+<p>This example shows a functional approach to defining processing rules.
+We'll look at an application that does various kinds analytical
+processing steps in a functional style.
+This includes Extract, Transform, Filter, Classify, Reduce, and Report.</p>
+<p>In particular, we'll define each of the complex classification rules as a small
+function. Doing this lets us use higher-order functions like
+<tt class="docutils literal">map()</tt>, <tt class="docutils literal">filter()</tt>, and variations on <tt class="docutils literal">reduce()</tt>
+to perform the overall tasks.</p>
+<p>The practical result is counts of Trello cards started, deleted,
+and finished, grouped by date. This allows simple computations of
+velocity starting and velocity finishing.</p>
+<div class="contents topic" id="contents">
+<p class="topic-title first">Contents</p>
+<ul class="simple">
+<li><a class="reference internal" href="#module-docstring" id="id1">Module Docstring</a></li>
+<li><a class="reference internal" href="#trello-data-access" id="id2">Trello Data Access</a></li>
+<li><a class="reference internal" href="#imports" id="id3">Imports</a></li>
+<li><a class="reference internal" href="#parse-a-configuration-file" id="id4">Parse a Configuration File</a></li>
+<li><a class="reference internal" href="#trello-exploration" id="id5">Trello Exploration</a></li>
+<li><a class="reference internal" href="#action-objects" id="id6">Action Objects</a><ul>
+<li><a class="reference internal" href="#action-transformations" id="id7">Action Transformations</a></li>
+<li><a class="reference internal" href="#action-builder" id="id8">Action Builder</a></li>
+<li><a class="reference internal" href="#action-input-wrap-up" id="id9">Action Input Wrap-up</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#event-summaries" id="id10">Event Summaries</a><ul>
+<li><a class="reference internal" href="#action-names" id="id11">Action Names</a></li>
+<li><a class="reference internal" href="#event-classifiers" id="id12">Event Classifiers</a></li>
+<li><a class="reference internal" href="#action-filter" id="id13">Action Filter</a></li>
+<li><a class="reference internal" href="#action-to-event-mapping" id="id14">Action to Event Mapping</a></li>
+<li><a class="reference internal" href="#action-to-event-wrap-up" id="id15">Action-to-Event Wrap-Up</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#final-velocity-data" id="id16">Final Velocity Data</a><ul>
+<li><a class="reference internal" href="#normalize-by-date" id="id17">Normalize By Date</a></li>
+<li><a class="reference internal" href="#convert-to-running-counts" id="id18">Convert to Running Counts</a></li>
+<li><a class="reference internal" href="#pivot-for-csv-output" id="id19">Pivot for CSV Output</a></li>
+<li><a class="reference internal" href="#velocity-computation-wrap-up" id="id20">Velocity Computation Wrap-Up</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#main-script" id="id21">Main Script</a><ul>
+<li><a class="reference internal" href="#prepare" id="id22">Prepare</a></li>
+<li><a class="reference internal" href="#extract" id="id23">Extract</a></li>
+<li><a class="reference internal" href="#analyze" id="id24">Analyze</a></li>
+<li><a class="reference internal" href="#report" id="id25">Report</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#conclusion" id="id26">Conclusion</a></li>
+</ul>
+</div>
+<div class="section" id="module-docstring">
+<h1><a class="toc-backref" href="#id1">Module Docstring</a></h1>
+<pre class="literal-block">
+&quot;&quot;&quot;
+Count Actions on a Trello Board.
+
+Given a board name, count actions to get a raw &quot;create&quot; and &quot;finish&quot; count.
+
+This involves several kinds of functional-programming mappings.
+
+-   From trello document to an internal Action named tuple.
+
+    This uses a collection of individual functions (some expressed as lambdas)
+    to build each attribute of the ``Action`` object.
+
+-   Some lists are filtered to exclude them.
+
+    This uses a collection of individual functions to determine which lists
+    to pass and which to reject. The idea is that a simple list of functions
+    can provide the &quot;pass&quot; rules.
+
+-   A collection of rules is used to map the Action to an Event summary.
+
+    The &quot;create&quot; event comes from copyCard, createCard, moveCardToBoard,
+        and convertToCardFromCheckItem actions.
+
+    The &quot;remove&quot; event is deleteCard and moveCardFromBoard.
+
+    The &quot;finish&quot; count depends on moving cards to a specific list or closing
+        cards. This means identifying all of the &quot;finished&quot; lists.
+
+    This is done through a list of decision rules.
+
+-   The event summaries for each date are counted.
+
+A number of final transformations are performed to modify the raw counts
+into a table with date as the row key and the event types spread across the columns.
+This tabular pivot is helpful for graphing and subsequent decision support.
+&quot;&quot;&quot;
+</pre>
+</div>
+<div class="section" id="trello-data-access">
+<h1><a class="toc-backref" href="#id2">Trello Data Access</a></h1>
+<p>The raw data comes from Trello. Visit <a class="reference external" href="http:://trello.com">http:://trello.com</a> for details.</p>
+<p>We're using the Trello API accessed via py-trello.
+See <a class="reference external" href="https://github.com/sarumont/py-trello/tree/master/trello">https://github.com/sarumont/py-trello/tree/master/trello</a>
+And <a class="reference external" href="https://pypi.python.org/pypi/py-trello/0.9.0">https://pypi.python.org/pypi/py-trello/0.9.0</a>.</p>
+<p>Generally, we're interested in all events for a given board.
+Therefore, the <tt class="docutils literal">Board</tt> class definition is what we'll focus on.</p>
+<p>Boards have actions. They also have lists.</p>
+<p>Often, the have distinct semantics. We recognize three kinds of lists.</p>
+<ul class="simple">
+<li>Reference data or Ungroomed Backlog.
+The cards in these lists are neither stories nor tasks.
+The lists should simply be ignored for computing velocity.</li>
+<li>Finish States. The cards in these lists represent completed tasks or
+stories. This gives the &quot;finishing&quot; rate.</li>
+<li>Other states. The cards in these lists are in-process stories or tasks.
+This gives the &quot;starting&quot; rate.</li>
+</ul>
+<p>The point, after all this analysis, is to stop starting and start finishing.</p>
+<pre class="literal-block">
+from trello import TrelloClient
+from trello.board import Board
+</pre>
+</div>
+<div class="section" id="imports">
+<h1><a class="toc-backref" href="#id3">Imports</a></h1>
+<p>Here are the other modules we'll need.</p>
+<pre class="literal-block">
+from collections import Counter, namedtuple, defaultdict
+import csv
+import datetime
+from enum import Enum
+import itertools
+from pathlib import Path
+from pprint import pprint
+import re
+import sys
+</pre>
+<p>We'll use some type hints. We haven't provided complete
+type hinting because it's a little difficult to define some
+of the more complex functions.</p>
+<pre class="literal-block">
+from typing import (List, Dict, Iterator, List, Tuple, Callable, Union, NewType)
+</pre>
+<p>Here are a few functions to help with functional programming.</p>
+<p>A function we can use to pluck the first
+item from an iterable. This seems better than using
+<tt class="docutils literal">itertools.take(1, iterable)</tt></p>
+<pre class="literal-block">
+first = lambda iterable: next(iterable)
+</pre>
+<p>Another function to slightly simplify filtering data.</p>
+<pre class="literal-block">
+non_none = lambda iterable: filter(None, iterable)
+</pre>
+</div>
+<div class="section" id="parse-a-configuration-file">
+<h1><a class="toc-backref" href="#id4">Parse a Configuration File</a></h1>
+<p>This is an overhead for extracting a configuration from a
+small shell-friendly settings file.</p>
+<p>The file contains lines that are -- precisely -- shell environment
+variable settings. Here's what the <tt class="docutils literal">keys.sh</tt> file looks like.</p>
+<pre class="code bash literal-block">
+<span class="name builtin">export</span> <span class="name variable">TRELLO_API_KEY</span><span class="operator">=</span>...
+<span class="name builtin">export</span> <span class="name variable">TRELLO_API_SECRET</span><span class="operator">=</span>...
+<span class="name builtin">export</span> <span class="name variable">OAUTH_TOKEN</span><span class="operator">=</span>...
+<span class="name builtin">export</span> <span class="name variable">OAUTH_TOKEN_SECRET</span><span class="operator">=</span>...
+<span class="name builtin">export</span> <span class="name variable">board_name</span><span class="operator">=</span>Blog: Algorithmic study
+<span class="name builtin">export</span> <span class="name variable">reject</span><span class="operator">=</span>Reference Material
+<span class="name builtin">export</span> <span class="name variable">finished</span><span class="operator">=</span>Things Actually Finished
+</pre>
+<p>Why use a format like this?</p>
+<p>It follows in a simple way from the onboarding process
+described in the README.rst.</p>
+<p>In order to get the OATH token and secret, we must run the following command:</p>
+<pre class="code bash literal-block">
+$ python3.6 -m trello.util
+</pre>
+<p>This command requires the <tt class="docutils literal">TRELLO_API_KEY</tt> and <tt class="docutils literal">TRELLO_API_SECRET</tt>
+as environment variables. We could set the manually, but
+a more reliable way to do this is to put the first values into a file named
+<tt class="docutils literal">keys.sh</tt> and then use <tt class="docutils literal">source ./keys.sh</tt> to set the environment variables.</p>
+<p>Since we have to start that way, we might as well continue that way.
+All of the configuration parameters look like environment variables settings.</p>
+<pre class="literal-block">
+def get_config(config_text: str) -&gt; Dict[str, str]:
+    &quot;&quot;&quot;
+    Get the configuration file value from text.
+
+    This handles the ``export`` keyword gracefully.
+
+    :param config_path: a Path object to identify the configuration file
+    :returns: dictionary with configuration settings.
+    &quot;&quot;&quot;
+    line_pat = re.compile(r'(?:export\s+)?(\w+)=(.*)')
+    matches = map(line_pat.match, config_text.splitlines())
+    config = {
+        m.group(1): m.group(2) for m in matches
+    }
+    return config
+</pre>
+<p>Here's an example of how this works</p>
+<pre class="code python literal-block">
+<span class="operator">&gt;&gt;&gt;</span> <span class="keyword namespace">from</span> <span class="name namespace">action_counts</span> <span class="keyword namespace">import</span> <span class="operator">*</span>
+<span class="operator">&gt;&gt;&gt;</span> <span class="name">get_config</span><span class="punctuation">(</span><span class="literal string double">&quot;export A=B&quot;</span><span class="punctuation">)</span>
+<span class="punctuation">{</span><span class="literal string single">'A'</span><span class="punctuation">:</span> <span class="literal string single">'B'</span><span class="punctuation">}</span>
+<span class="operator">&gt;&gt;&gt;</span> <span class="name">get_config</span><span class="punctuation">(</span><span class="literal string double">&quot;C=D</span><span class="literal string escape">\n</span><span class="literal string double">E=F&quot;</span><span class="punctuation">)</span>
+<span class="punctuation">{</span><span class="literal string single">'C'</span><span class="punctuation">:</span> <span class="literal string single">'D'</span><span class="punctuation">,</span> <span class="literal string single">'E'</span><span class="punctuation">:</span> <span class="literal string single">'F'</span><span class="punctuation">}</span>
+</pre>
+</div>
+<div class="section" id="trello-exploration">
+<h1><a class="toc-backref" href="#id5">Trello Exploration</a></h1>
+<p>These first two functions aren't essential. They're here to
+support exploration of a Trello account and board to locate
+the proper names for lists.</p>
+<p>Get a list of all boards accessible with the given credentials.</p>
+<pre class="literal-block">
+def board_list(client: TrelloClient):
+    &quot;&quot;&quot;
+    Given the client, print all boards.
+
+    :param client: The connected TrelloClient instance.
+    &quot;&quot;&quot;
+    for b in client.list_boards():
+        print(n.name)
+</pre>
+<p>Get a list of all lists on a given board.</p>
+<pre class="literal-block">
+def list_list(client: TrelloClient, board_name: str):
+    &quot;&quot;&quot;
+    Given a client and a board name, print all lists on that board.
+
+    :param client: The connected TrelloClient instance
+    :param board_name: A name for a board
+    &quot;&quot;&quot;
+    for board in find_board(client, board_name):
+        print(board.name)
+        for list_ in board.all_lists():
+            print(list_.name)
+</pre>
+<p>The <tt class="docutils literal">find_board()</tt> function locates all of the relevant boards that match
+a given name. Often, we'll simply take the first matching
+board. But, we could process all similar boards.</p>
+<pre class="literal-block">
+def find_board(client: TrelloClient, name: str) -&gt; Iterator[Board]:
+    &quot;&quot;&quot;
+    Find boards with names starting with the given name string.
+
+    :param client: The connected TrelloClient instance
+    :param name: A name for a board
+    :returns: Yields all matching Board instances
+    &quot;&quot;&quot;
+    for b in client.list_boards():
+        if b.name.startswith(name):
+            yield b
+</pre>
+</div>
+<div class="section" id="action-objects">
+<h1><a class="toc-backref" href="#id6">Action Objects</a></h1>
+<p>Our processing is focused on analyzing <tt class="docutils literal">Action</tt> instances.</p>
+<p>This contains the attributes we care about from a Trello action
+document.</p>
+<ul class="simple">
+<li>date -- essential for computing velocities.</li>
+<li>action name -- these will be mapped to event summaries.</li>
+<li>list name -- these help fine-tune the event mapping.</li>
+<li>card name -- this can be helpful for debugging.</li>
+</ul>
+<p>We also include the original (&quot;raw&quot;) action document as an aid for
+debugging.</p>
+<pre class="literal-block">
+Action = namedtuple('Action', ['date', 'action', 'card', 'list', 'raw'])
+</pre>
+<p>We've made them namedtuples because they're immutable. They expose
+certain data attributes.</p>
+<p>Why not use a class with <tt class="docutils literal">&#64;property</tt> methods to compute derived values?</p>
+<p>Good question. That's an elegant alternative.</p>
+<p>However, the immutability of the tuple is appealing. This is not stateful
+data. It's a historical record. For this kind of analysis, a simple <tt class="docutils literal">map()</tt>
+to transform source documents to <tt class="docutils literal">Action</tt> instances seems like the ideal
+solution.</p>
+<p>There are two parts to building the sequence of <tt class="docutils literal">Action</tt> instances.</p>
+<ul class="simple">
+<li><a class="reference internal" href="#action-transformations">Action Transformations</a> these are field-by-field transformations.</li>
+<li><a class="reference internal" href="#action-builder">Action Builder</a> this combines the fields to create the resulting object.</li>
+</ul>
+<div class="section" id="action-transformations">
+<h2><a class="toc-backref" href="#id7">Action Transformations</a></h2>
+<p>These functions (or lambdas) create the individual fields
+of the <tt class="docutils literal">Action</tt> instance.</p>
+<p>There are four customized fields:</p>
+<ul class="simple">
+<li><strong>date</strong>. This parses the UTC time.
+Rather than define a mapping for the &quot;Z&quot; timezone, we force in UTC
+to create a timezone-aware <tt class="docutils literal">datetime</tt> object. We can then extract
+a local date.</li>
+</ul>
+<pre class="literal-block">
+UTC_FORMAT = &quot;%Y-%m-%dT%H:%M:%S.%fZ&quot;
+make_action_date = (lambda document:
+    datetime.datetime
+    .strptime(document['date'], UTC_FORMAT)
+    .replace(tzinfo=datetime.timezone.utc)
+    .date()
+    )
+</pre>
+<ul class="simple">
+<li><strong>action</strong>. A copy of a field without any transformation.</li>
+</ul>
+<pre class="literal-block">
+make_action_action = lambda document: document['type']
+</pre>
+<ul class="simple">
+<li><strong>card</strong>.  The name or the ID of a card. Not all cards have names.
+This is confusing as a lambda. So it's defined as a function.</li>
+</ul>
+<pre class="literal-block">
+def make_action_card(document : Dict) -&gt; bool:
+    if 'name' in document['data']['card']:
+        # Creates/Moves
+        return document['data']['card']['name']
+    else:
+        # Deletes
+        return document['data']['card']['id']
+</pre>
+<ul>
+<li><p class="first"><strong>list</strong>. The name of a list. There are two places to
+look in the action document.</p>
+<p>Since the entire document is available, we could use <tt class="docutils literal"><span class="pre">document['type']</span></tt>
+to distinguish the two cases. It's simpler, however, to simply look in
+all of the usual places for the information, since there are only two choices.</p>
+</li>
+</ul>
+<pre class="literal-block">
+def make_action_list(document : Dict) -&gt; bool:
+    if 'list' in document['data']:
+        # Creates/Deletes
+        return document['data']['list']['name']
+    elif 'listAfter' in document['data']:
+        # Moves
+        return document['data']['listAfter']['name']
+</pre>
+<p>We'll use all of these field-level transformation functions to generate
+the required <tt class="docutils literal">Action</tt> instance.</p>
+</div>
+<div class="section" id="action-builder">
+<h2><a class="toc-backref" href="#id8">Action Builder</a></h2>
+<p>We need to build complete <tt class="docutils literal">Action</tt> instances by applying the field-level
+transformations. Each transformation is independent, and extracts one field's
+value from the source document.</p>
+<p>There are cases where a field might be decomposed. This would lead to
+two-tier processing. A single lambda would create a tuple with the values.
+Other lambdas would chose items from the tuple. With a simple cache, this
+can be very fast and still functionally focused with no stateful processing.</p>
+<p>First, we have a field-to-function mapping. Each target field name
+from the <tt class="docutils literal">Action</tt> namedtuple is paired with a function that
+builds that field from the source document.</p>
+<pre class="literal-block">
+ACTION_FIELD_MAP = {
+    'date': make_action_date,
+    'action': make_action_action,
+    'card': make_action_card,
+    'list': make_action_list,
+    'raw': lambda document: document
+}
+</pre>
+<p>Ideally, we'd derived the definition of the <tt class="docutils literal">Action</tt> class from this mapping.
+Doing that gets the presentation a little out of order.
+We aren't strictly DRY about this. A change to this mapping
+will require a change to the namedtuple function above.</p>
+<p>Given this set of fields, we can then apply each
+function to the source document and build an Action instance.</p>
+<pre class="literal-block">
+def make_action(raw_action : Dict) -&gt; Action:
+    return Action(
+        **{field: transform(raw_action) for field, transform in ACTION_FIELD_MAP.items()}
+    )
+</pre>
+<p>Let's examine this closely.</p>
+<ol class="arabic simple">
+<li>The ACTION_FIELD_MAP has field names and transform functions.</li>
+<li>We apply the transform function to the raw_action document.</li>
+<li>The result is a dictionary that has the structure required by the <tt class="docutils literal">Action</tt> namedtuple.</li>
+<li>We transform this into an <tt class="docutils literal">Action</tt> instance.</li>
+</ol>
+<p>This function could be restated as <tt class="docutils literal">lambda raw_action: <span class="pre">Action(**{...})</span></tt>.</p>
+<p>The useful sequence of <tt class="docutils literal">Action</tt> instances is a mapping of the
+<tt class="docutils literal">make_action</tt> function to the source of action documents from the
+Trello board.</p>
+<pre class="literal-block">
+def action_iter(board: Board, actions: List[str], limit=100) -&gt; Iterator[Action]:
+    &quot;&quot;&quot;
+    Iterate over all matching actions on this board.
+
+    This projects raw document into simplified
+    :class:`Action` instances.
+
+    :returns: Action namedtuple instances.
+    &quot;&quot;&quot;
+    return map(make_action, board.fetch_actions(actions, action_limit=limit))
+</pre>
+<p>This, too, coud be reframed into two simpler parts.</p>
+<ul class="simple">
+<li><tt class="docutils literal">query = board.fetch_actions(actions, action_limit=limit)</tt></li>
+<li><tt class="docutils literal">results = lambda query: map(make_action, query)</tt></li>
+</ul>
+<p>It seems slightly nicer to leave them combined into a single function.
+The goal is to be able to do this:</p>
+<pre class="code python literal-block">
+<span class="keyword">for</span> <span class="name">action</span> <span class="operator word">in</span> <span class="name">action_iter</span><span class="punctuation">(</span><span class="name">Board</span><span class="punctuation">,</span> <span class="punctuation">[</span><span class="literal string single">'createCard'</span><span class="punctuation">,</span> <span class="operator">...</span><span class="punctuation">]):</span>
+    <span class="name">summarize</span> <span class="name">the</span> <span class="literal string backtick">``</span><span class="name">Action</span><span class="literal string backtick">``</span> <span class="name">instance</span><span class="operator">.</span>
+</pre>
+<p>We provide a Trello <tt class="docutils literal">Board</tt> instance and a list of actions to query.
+This</p>
+</div>
+<div class="section" id="action-input-wrap-up">
+<h2><a class="toc-backref" href="#id9">Action Input Wrap-up</a></h2>
+<p>Almost all raw-data processing has this same design pattern.</p>
+<ol class="arabic simple">
+<li>Define the transformations from source to useful data.</li>
+<li>Define a <tt class="docutils literal">make_X()</tt> function to apply the transformations and create the
+useful instances.</li>
+<li>Apply the <tt class="docutils literal">make_X()</tt> function to the source documents.</li>
+</ol>
+<p>The result is an iterator over the mapping from source to useful <tt class="docutils literal">Action</tt>
+instance.</p>
+<p>There is no stateful data. Everything is defined independently. The fields
+can evolve independently; new features can be added and bugs fixed without
+any &quot;ripple effect&quot;.</p>
+<p>The next step is to summarize the <tt class="docutils literal">Action</tt> instances.</p>
+</div>
+</div>
+<div class="section" id="event-summaries">
+<h1><a class="toc-backref" href="#id10">Event Summaries</a></h1>
+<p>We categorize <tt class="docutils literal">Actions</tt> into higher-level groups.
+Here's an enumeration of the different kinds of Events we're going to count.</p>
+<pre class="literal-block">
+Event = Enum('Event', ['ignore', 'create', 'remove', 'finish'])
+</pre>
+<p>The events have the following semantics.</p>
+<ul class="simple">
+<li>ignore. These actions are irrelevant to our analysis.</li>
+<li>create. These actions created on card on a non-reference list.
+This measures our &quot;starting&quot; velocity.</li>
+<li>remove. These actions removed cards, decreasing the interesting
+create events. This reduces the &quot;starting&quot; velocity.</li>
+<li>finish. These actions finished at story. This is the &quot;finishing&quot; velocity.</li>
+</ul>
+<p>We can use this to determine if we're starting too many things and finishing
+too few things. We can help re-oriented a team to stop starting and start finishing.</p>
+<div class="section" id="action-names">
+<h2><a class="toc-backref" href="#id11">Action Names</a></h2>
+<p>As an obscure detail, we have two slightly different representations
+for the raw action names that are defined by Trello.</p>
+<ul class="simple">
+<li>The action text as seen in the document.</li>
+<li>A variation on the action text as used to query the actions from a Board.</li>
+</ul>
+<p>The action type might be <tt class="docutils literal">&quot;updateCard&quot;</tt>. The query might be <tt class="docutils literal">&quot;updateCard:closed&quot;</tt>.</p>
+<p>We'll parse the action from the query-sting version of an action type.</p>
+<pre class="literal-block">
+parse_action = lambda type_text: type_text.partition(':')[0]
+</pre>
+<pre class="code python literal-block">
+<span class="operator">&gt;&gt;&gt;</span> <span class="keyword namespace">from</span> <span class="name namespace">action_counts</span> <span class="keyword namespace">import</span> <span class="operator">*</span>
+<span class="operator">&gt;&gt;&gt;</span> <span class="name">parse_action</span><span class="punctuation">(</span><span class="literal string single">'updateCard:closed'</span><span class="punctuation">)</span>
+<span class="literal string single">'updateCard'</span>
+</pre>
+</div>
+<div class="section" id="event-classifiers">
+<h2><a class="toc-backref" href="#id12">Event Classifiers</a></h2>
+<p>The objective is to classify <tt class="docutils literal">Action</tt> details into <tt class="docutils literal">Event</tt> categories.</p>
+<p>Therefore, we must &quot;classify&quot; or &quot;match&quot; a number of similar <tt class="docutils literal">Action</tt> instances.
+A rule will map similar instances to a single kind of <tt class="docutils literal">Event</tt>.</p>
+<p>The classification is clearly a function of the input <tt class="docutils literal">Action</tt>.</p>
+<p>Less clearly, a classification is also a function of configuration details. We'd
+like to avoid encoding Trello action strings into the rules if we can.
+More fundamentally, we cannot encode the list names into the rules.
+The list names must be run-time, dynamic values.</p>
+<p>Further -- to make an attempt at being DRY -- we have two uses for the
+Trello action strings.</p>
+<ul class="simple">
+<li>Transformation Action to Event class.</li>
+<li>Querying Trello for the Actions on a board.</li>
+</ul>
+<p>These considerations (configuration and DRY) lead us to use
+partial functions to define the rule. We can distinguish
+between arguments used to configure the rule and arguments
+that are applied as part of the final decision-making by the rule.
+And we can extract the action strings from the rules to use for querying.</p>
+<p>The rules are defined like this:</p>
+<pre class="code python literal-block">
+<span class="punctuation">[(</span><span class="name">MATCH_RULE</span><span class="punctuation">,</span> <span class="punctuation">(</span><span class="name">args</span><span class="punctuation">,</span> <span class="operator">...</span><span class="punctuation">),</span> <span class="name">event</span><span class="punctuation">),</span> <span class="operator">...</span> <span class="punctuation">]</span>
+</pre>
+<p>We provide a triple with the function, the configuration arguments,
+and the resulting event.</p>
+<p>The partial functions are used like this:</p>
+<pre class="code python literal-block">
+<span class="name">MATCH_RULE</span><span class="punctuation">(</span><span class="operator">*</span><span class="name">args</span><span class="punctuation">)(</span><span class="name">action</span><span class="punctuation">)</span>
+</pre>
+<p>The first wave of argument processing, using <tt class="docutils literal"><span class="pre">MATCH_RULE(*args)</span></tt>, creates a function that
+makes the final match decision.
+This first-wave function is subsequently applied to the <tt class="docutils literal">action</tt> argument
+for filtering or mapping to an event type.</p>
+<p>There are several rule types:</p>
+<ul class="simple">
+<li>Matches if the text of the action type matches the <tt class="docutils literal">Action.action</tt> field.</li>
+</ul>
+<pre class="literal-block">
+MATCH_ACTION_TYPE = lambda type_text: lambda action: action.action == type_text
+</pre>
+<ul class="simple">
+<li>Matches if the <tt class="docutils literal">Action.list</tt> field is in the target lists.</li>
+</ul>
+<pre class="literal-block">
+MATCH_IN_LIST = lambda list_names: lambda action: action.list in list_names
+</pre>
+<ul class="simple">
+<li>Matches if the <tt class="docutils literal">Action.list</tt> field is not in the target lists.</li>
+</ul>
+<pre class="literal-block">
+MATCH_NOT_LIST = lambda list_names: lambda action: action.list not in list_names
+</pre>
+<ul class="simple">
+<li>Matches if the <tt class="docutils literal">Action.action</tt> text and the <tt class="docutils literal">Action.list</tt> is in the target lists.</li>
+</ul>
+<pre class="literal-block">
+MATCH_ACTION_TYPE_IN_LIST = (lambda type_text, list_names:
+    lambda action: action.action == parse_action(type_text) and action.list in list_names
+    )
+</pre>
+<ul class="simple">
+<li>Matches if the <tt class="docutils literal">Action.action</tt> text and the <tt class="docutils literal">Action.list</tt> is not in the target lists.</li>
+</ul>
+<pre class="literal-block">
+MATCH_ACTION_TYPE_NOT_LIST = (lambda type_text, list_names:
+    lambda action: action.action == parse_action(type_text) and action.list not in list_names
+    )
+</pre>
+<p>Some of the above rule types require the run-time input of the specific
+lists which count as finished. We do this last-minute binding in a function
+that emits a list of rules, some of which have the list names injected into them.</p>
+<pre class="literal-block">
+Match_Args = Union[Tuple[str], Tuple[str, List[str]]]
+Match_Action = Callable[[Action], Event]
+Match_Rule = Callable[[Match_Args], Match_Action]
+
+Classifier_Rule_List = List[Tuple[Match_Rule, Match_Args, Event]]
+
+def build_action_event_rules(finished_lists: List[str]) -&gt; Classifier_Rule_List:
+    &quot;&quot;&quot;
+    Build the Action-&gt;Event mapping rules. This requires injecting
+    the finished list into the rules.
+
+    :param finished_lists: The names of lists that indicate done-ness
+    :returns: sequence of three-tuples with rule function, configuration args, and final event.
+    &quot;&quot;&quot;
+    return [
+        (MATCH_ACTION_TYPE, ('copyCard',), Event.create),
+        (MATCH_ACTION_TYPE, ('createCard',), Event.create),
+        (MATCH_ACTION_TYPE, ('moveCardToBoard',), Event.create),
+        (MATCH_ACTION_TYPE, ('convertToCardFromCheckItem',), Event.create),
+
+        (MATCH_ACTION_TYPE, ('deleteCard',), Event.remove),
+        (MATCH_ACTION_TYPE, ('moveCardFromBoard',), Event.remove),
+
+        (MATCH_ACTION_TYPE_IN_LIST, ('updateCard:closed', finished_lists), Event.finish),
+        (MATCH_ACTION_TYPE_IN_LIST, ('updateCard:idList', finished_lists), Event.finish),
+
+        (MATCH_ACTION_TYPE_NOT_LIST, ('updateCard:idList', finished_lists), Event.ignore),
+    ]
+</pre>
+<p>Each rule is focused on a single kind of input action. This leads to a number
+of rules of a common form. The rules are independent, and we can, add, change, or
+delete freely.</p>
+<p>An alternative design would focus the rules on the output event type.
+We might have a mapping from event type to a list of conditions that indicate the
+defined event. This is a kind of kind of conjunctive normal form.</p>
+<p>We might say <tt class="docutils literal">Event.create if any(RULE(action) for rule in create_rules) else None</tt>.</p>
+<p>This is a simple optimization. It doesn't have any material performance impact.
+And it combines details into a larger structure, imposing some minor dependencies.
+Also, it makes it difficult to get a simple list of actions to support a Trello
+action query.</p>
+<p>Here's how a collection of rules works.</p>
+<pre class="code python literal-block">
+<span class="operator">&gt;&gt;&gt;</span> <span class="keyword namespace">from</span> <span class="name namespace">action_counts</span> <span class="keyword namespace">import</span> <span class="operator">*</span>
+<span class="operator">&gt;&gt;&gt;</span> <span class="name">finished_lists</span> <span class="operator">=</span> <span class="punctuation">[</span><span class="literal string single">'Some List'</span><span class="punctuation">]</span>
+<span class="operator">&gt;&gt;&gt;</span> <span class="name">EVENT_RULES</span> <span class="operator">=</span> <span class="name">build_action_event_rules</span><span class="punctuation">(</span><span class="name">finished_lists</span><span class="punctuation">)</span>
+<span class="operator">&gt;&gt;&gt;</span> <span class="name">action</span> <span class="operator">=</span> <span class="name">Action</span><span class="punctuation">(</span><span class="literal string single">'date'</span><span class="punctuation">,</span> <span class="literal string single">'copyCard'</span><span class="punctuation">,</span> <span class="literal string single">'card'</span><span class="punctuation">,</span> <span class="literal string single">'Some List'</span><span class="punctuation">,</span> <span class="name builtin pseudo">None</span><span class="punctuation">)</span>
+<span class="operator">&gt;&gt;&gt;</span> <span class="name builtin">list</span><span class="punctuation">(</span><span class="name builtin">filter</span><span class="punctuation">(</span><span class="name builtin pseudo">None</span><span class="punctuation">,</span> <span class="punctuation">(</span><span class="name">rule_type</span><span class="punctuation">(</span><span class="operator">*</span><span class="name">args</span><span class="punctuation">)(</span><span class="name">action</span><span class="punctuation">)</span> <span class="operator word">and</span> <span class="name">event</span> <span class="keyword">for</span> <span class="name">rule_type</span><span class="punctuation">,</span> <span class="name">args</span><span class="punctuation">,</span> <span class="name">event</span> <span class="operator word">in</span> <span class="name">EVENT_RULES</span><span class="punctuation">)))</span>
+<span class="punctuation">[</span><span class="operator">&lt;</span><span class="name">Event</span><span class="operator">.</span><span class="name">create</span><span class="punctuation">:</span> <span class="literal number integer">2</span><span class="operator">&gt;</span><span class="punctuation">]</span>
+<span class="operator">&gt;&gt;&gt;</span> <span class="name">action</span> <span class="operator">=</span> <span class="name">Action</span><span class="punctuation">(</span><span class="literal string single">'date'</span><span class="punctuation">,</span> <span class="literal string single">'updateCard'</span><span class="punctuation">,</span> <span class="literal string single">'card'</span><span class="punctuation">,</span> <span class="literal string single">'Some List'</span><span class="punctuation">,</span> <span class="name builtin pseudo">None</span><span class="punctuation">)</span>
+<span class="operator">&gt;&gt;&gt;</span> <span class="name builtin">list</span><span class="punctuation">(</span><span class="name builtin">filter</span><span class="punctuation">(</span><span class="name builtin pseudo">None</span><span class="punctuation">,</span> <span class="punctuation">(</span><span class="name">rule_type</span><span class="punctuation">(</span><span class="operator">*</span><span class="name">args</span><span class="punctuation">)(</span><span class="name">action</span><span class="punctuation">)</span> <span class="operator word">and</span> <span class="name">event</span> <span class="keyword">for</span> <span class="name">rule_type</span><span class="punctuation">,</span> <span class="name">args</span><span class="punctuation">,</span> <span class="name">event</span> <span class="operator word">in</span> <span class="name">EVENT_RULES</span><span class="punctuation">)))</span>
+<span class="punctuation">[</span><span class="operator">&lt;</span><span class="name">Event</span><span class="operator">.</span><span class="name">finish</span><span class="punctuation">:</span> <span class="literal number integer">4</span><span class="operator">&gt;</span><span class="punctuation">,</span> <span class="operator">&lt;</span><span class="name">Event</span><span class="operator">.</span><span class="name">finish</span><span class="punctuation">:</span> <span class="literal number integer">4</span><span class="operator">&gt;</span><span class="punctuation">]</span>
+</pre>
+<p>Given an <tt class="docutils literal">Action</tt> instance, all of the rules in <tt class="docutils literal">EVENT_RULES</tt> are applied.
+First, they're applied to the fixed configuration arguments to create a decision function.
+Then the resulting decision function is applied to the <tt class="docutils literal">Action</tt> instance.</p>
+<p>If the match result is <tt class="docutils literal">True</tt>, we can use <tt class="docutils literal">and event</tt> to return the <tt class="docutils literal">Event</tt> type.</p>
+<p>If the match result is <tt class="docutils literal">False</tt>, that's the overall result.</p>
+<p>Using <tt class="docutils literal">filter(None, iterable)</tt> discards all &quot;falsy&quot; values, leaving the <tt class="docutils literal">Event</tt> type.</p>
+<p>Generally, there's only one match. In some cases, there is more than one because
+our rule doesn't distinguish between moving and closing a card.</p>
+<p>Note that each rule is completely independent of all other rules. A change
+to one does not break another. There's no ripple effect. There are no
+stateful variables.</p>
+</div>
+<div class="section" id="action-filter">
+<h2><a class="toc-backref" href="#id13">Action Filter</a></h2>
+<p>We also need to exclude certain lists from analysis. This is a filter that's
+applied early in the process to limit the number of <tt class="docutils literal">Action</tt> instances that
+are considered.</p>
+<p>We can think about this as rejecting certain lists.
+Or we can think about passing all lists which are not those reject lists.</p>
+<pre class="literal-block">
+Pass_Rule_List = List[Tuple[Match_Rule, Tuple[List[str]]]]
+
+def build_pass_rules(reject_lists: List[str]) -&gt; Pass_Rule_List:
+    &quot;&quot;&quot;
+    Build the Action rejection rules. This requires injecting
+    the reject list into the rules.
+
+    The idea is that **all** rules must return True to process the row
+    further. Any False is rejection.
+
+    :param reject_lists: The names of lists to ignore
+    :returns: sequence of two-tuples with rule function, configuration args.
+    &quot;&quot;&quot;
+    return [
+        (MATCH_NOT_LIST, (reject_lists,)),
+    ]
+</pre>
+<p>We might have several criteria required for passing.</p>
+<p>Currently, there's only a single rule. Since we've defined this as a list,
+we can add rules easily.</p>
+<pre class="code python literal-block">
+<span class="operator">&gt;&gt;&gt;</span> <span class="keyword namespace">from</span> <span class="name namespace">action_counts</span> <span class="keyword namespace">import</span> <span class="operator">*</span>
+<span class="operator">&gt;&gt;&gt;</span> <span class="name">reject_lists</span> <span class="operator">=</span> <span class="punctuation">[</span><span class="literal string single">'Reject This List'</span><span class="punctuation">]</span>
+<span class="operator">&gt;&gt;&gt;</span> <span class="name">PASS_RULES</span> <span class="operator">=</span> <span class="name">build_pass_rules</span><span class="punctuation">(</span><span class="name">reject_lists</span><span class="punctuation">)</span>
+<span class="operator">&gt;&gt;&gt;</span> <span class="name">action1</span> <span class="operator">=</span> <span class="name">Action</span><span class="punctuation">(</span><span class="literal string single">'date'</span><span class="punctuation">,</span> <span class="literal string single">'action'</span><span class="punctuation">,</span> <span class="literal string single">'card'</span><span class="punctuation">,</span> <span class="literal string single">'Reject This List'</span><span class="punctuation">,</span> <span class="name builtin pseudo">None</span><span class="punctuation">)</span>
+<span class="operator">&gt;&gt;&gt;</span> <span class="name builtin">all</span><span class="punctuation">(</span><span class="name">rule_type</span><span class="punctuation">(</span><span class="operator">*</span><span class="name">args</span><span class="punctuation">)(</span><span class="name">action1</span><span class="punctuation">)</span> <span class="keyword">for</span> <span class="name">rule_type</span><span class="punctuation">,</span> <span class="name">args</span> <span class="operator word">in</span> <span class="name">PASS_RULES</span><span class="punctuation">)</span>
+<span class="name builtin pseudo">False</span>
+<span class="operator">&gt;&gt;&gt;</span> <span class="name">action2</span> <span class="operator">=</span> <span class="name">Action</span><span class="punctuation">(</span><span class="literal string single">'date'</span><span class="punctuation">,</span> <span class="literal string single">'action'</span><span class="punctuation">,</span> <span class="literal string single">'card'</span><span class="punctuation">,</span> <span class="literal string single">'Another List'</span><span class="punctuation">,</span> <span class="name builtin pseudo">None</span><span class="punctuation">)</span>
+<span class="operator">&gt;&gt;&gt;</span> <span class="name builtin">all</span><span class="punctuation">(</span><span class="name">rule_type</span><span class="punctuation">(</span><span class="operator">*</span><span class="name">args</span><span class="punctuation">)(</span><span class="name">action2</span><span class="punctuation">)</span> <span class="keyword">for</span> <span class="name">rule_type</span><span class="punctuation">,</span> <span class="name">args</span> <span class="operator word">in</span> <span class="name">PASS_RULES</span><span class="punctuation">)</span>
+<span class="name builtin pseudo">True</span>
+
+<span class="operator">&gt;&gt;&gt;</span> <span class="name">raw_actions</span> <span class="operator">=</span> <span class="punctuation">[</span><span class="name">action1</span><span class="punctuation">,</span> <span class="name">action2</span><span class="punctuation">]</span>
+<span class="operator">&gt;&gt;&gt;</span> <span class="name">reject</span> <span class="operator">=</span> <span class="keyword">lambda</span> <span class="name">action</span><span class="punctuation">:</span> <span class="name builtin">all</span><span class="punctuation">(</span><span class="name">rule_type</span><span class="punctuation">(</span><span class="operator">*</span><span class="name">args</span><span class="punctuation">)(</span><span class="name">action</span><span class="punctuation">)</span> <span class="keyword">for</span> <span class="name">rule_type</span><span class="punctuation">,</span> <span class="name">args</span> <span class="operator word">in</span> <span class="name">PASS_RULES</span><span class="punctuation">)</span>
+<span class="operator">&gt;&gt;&gt;</span> <span class="name">passed_actions</span> <span class="operator">=</span> <span class="name builtin">filter</span><span class="punctuation">(</span><span class="name">reject</span><span class="punctuation">,</span> <span class="name">raw_actions</span><span class="punctuation">)</span>
+<span class="operator">&gt;&gt;&gt;</span> <span class="name builtin">list</span><span class="punctuation">(</span><span class="name">passed_actions</span><span class="punctuation">)</span>
+<span class="punctuation">[</span><span class="name">Action</span><span class="punctuation">(</span><span class="name">date</span><span class="operator">=</span><span class="literal string single">'date'</span><span class="punctuation">,</span> <span class="name">action</span><span class="operator">=</span><span class="literal string single">'action'</span><span class="punctuation">,</span> <span class="name">card</span><span class="operator">=</span><span class="literal string single">'card'</span><span class="punctuation">,</span> <span class="name builtin">list</span><span class="operator">=</span><span class="literal string single">'Another List'</span><span class="punctuation">,</span> <span class="name">raw</span><span class="operator">=</span><span class="name builtin pseudo">None</span><span class="punctuation">)]</span>
+</pre>
+</div>
+<div class="section" id="action-to-event-mapping">
+<h2><a class="toc-backref" href="#id14">Action to Event Mapping</a></h2>
+<p>The objective is to summarize <tt class="docutils literal">Action</tt> details into <tt class="docutils literal">Event</tt> categories.
+We've combined the filter and the categorization into a single function.
+The function is effectively this:</p>
+<blockquote>
+<tt class="docutils literal">map(classifier, filter(reject, action_iter))</tt></blockquote>
+<p>This will iterate over a source <tt class="docutils literal">Action</tt> instances.
+It will pass only those actions not on a reject list.
+It will map all of the classifier rules to each action and pick the first non-false result.</p>
+<pre class="literal-block">
+Date = NewType('Date', datetime.date)
+
+def action_event_iter(pass_rules: Pass_Rule_List,
+                      classifier_rules: Classifier_Rule_List,
+                      action_iter: Iterator[Action]) -&gt; Iterator[Tuple[Date, Event, Action]]:
+    &quot;&quot;&quot;
+    Classify actions into event type categories.
+
+    :param pass_rules: Rules required to pass an action forward for processing
+    :param action_event_rules: Rules that identify an event summary for an action
+    :param action_iter: An iterator over the source actions.
+    :returns: Iterator over (date, event type, action) triples.
+    &quot;&quot;&quot;
+    # Remove the cards on any of the reject lists.
+    pass_filter = lambda action: all(rule_type(*args)(action) for rule_type, args in pass_rules)
+
+    # Create a list of (date, event) pairs for each rule that matches.
+    # Ideally, only one item in the list, and we take that one item.
+    # Since 0 or many matches are problems, a variation on :func:`first` might be appropriate.
+    classify = (lambda action:
+        first(
+            filter(None,
+                ((action.date, event_classifier, action) if rule_type(*args)(action) else None
+                    for rule_type, args, event_classifier in classifier_rules)
+            )
+        )
+    )
+    return map(classify, filter(pass_filter, action_iter))
+</pre>
+<p>The combining of filter and map represents an optimization that might be a bad idea.
+Each operation is independent.
+It seems, however, that there's some value in combining the two operations
+because they're both essential to the event classification process.</p>
+</div>
+<div class="section" id="action-to-event-wrap-up">
+<h2><a class="toc-backref" href="#id15">Action-to-Event Wrap-Up</a></h2>
+<p>The event classification has a universal design pattern.</p>
+<ul class="simple">
+<li>Pass Meaningful Events. Our filter used a list of rules. All rules
+must be true for the <tt class="docutils literal">Action</tt> to be considered.</li>
+<li>Apply classifier rules to map an Action to an Event class.
+In this case, we rejected all falsy outputs (None and False, generally).
+What remains is zero, one, or many Event types matching the classifier rules.
+We use <tt class="docutils literal">first</tt> as a kind of reduction. A better reduction would assert
+that the rules all agree on the classification.</li>
+</ul>
+<p>We've defined each matching rule to be completely independent. The advantage
+of no stateful processing and no ripple effect from change are central.</p>
+<p>Next, we need to count the events and then normalize those counts into
+something we can display usefully for decision-makers.</p>
+</div>
+</div>
+<div class="section" id="final-velocity-data">
+<h1><a class="toc-backref" href="#id16">Final Velocity Data</a></h1>
+<p>The details produced by <tt class="docutils literal">action_event_iter()</tt> are three-tuples of the
+form (action.date, Event, Action).
+Essentially, we have data like this:</p>
+<table border="1" class="docutils">
+<colgroup>
+<col width="43%" />
+<col width="29%" />
+<col width="29%" />
+</colgroup>
+<tbody valign="top">
+<tr><td>date</td>
+<td>event</td>
+<td>action</td>
+</tr>
+<tr><td>yyyy-mm-dd</td>
+<td>create
+remove
+finish</td>
+<td>Action</td>
+</tr>
+<tr><td>yyyy-mm-dd</td>
+<td>c/r/f</td>
+<td>Action</td>
+</tr>
+</tbody>
+</table>
+<p>We need to reduce this from individual events to counts of events summarize
+by dates. The first step is to create a <tt class="docutils literal">Counter</tt> instance using the date and event
+plucked from each tuple.  We wind up with a <tt class="docutils literal">Dict[Tuple[Date, Event], int]</tt> structure.</p>
+<table border="1" class="docutils">
+<colgroup>
+<col width="43%" />
+<col width="29%" />
+<col width="29%" />
+</colgroup>
+<tbody valign="top">
+<tr><td>date</td>
+<td>event</td>
+<td>count</td>
+</tr>
+<tr><td>yyyy-mm-dd</td>
+<td>create</td>
+<td>int</td>
+</tr>
+<tr><td>&nbsp;</td>
+<td>remove</td>
+<td>int</td>
+</tr>
+<tr><td>&nbsp;</td>
+<td>finish</td>
+<td>int</td>
+</tr>
+<tr><td>yyyy-mm-dd</td>
+<td>create</td>
+<td>int</td>
+</tr>
+<tr><td>&nbsp;</td>
+<td>remove</td>
+<td>int</td>
+</tr>
+<tr><td>&nbsp;</td>
+<td>finish</td>
+<td>int</td>
+</tr>
+</tbody>
+</table>
+<p>We need to pivot this to a table like this for the final output.</p>
+<table border="1" class="docutils">
+<colgroup>
+<col width="35%" />
+<col width="22%" />
+<col width="22%" />
+<col width="22%" />
+</colgroup>
+<tbody valign="top">
+<tr><td>date</td>
+<td>create</td>
+<td>remove</td>
+<td>finish</td>
+</tr>
+<tr><td>yyyy-mm-dd</td>
+<td>int</td>
+<td>int</td>
+<td>int</td>
+</tr>
+<tr><td>yyyy-mm-dd</td>
+<td>int</td>
+<td>int</td>
+<td>int</td>
+</tr>
+<tr><td>yyyy-mm-dd</td>
+<td>int</td>
+<td>int</td>
+<td>int</td>
+</tr>
+</tbody>
+</table>
+<p>Because we'll be writing to a CSV, this is a <tt class="docutils literal">List[Dict[str, Any]]</tt> structure.</p>
+<div class="section" id="normalize-by-date">
+<h2><a class="toc-backref" href="#id17">Normalize By Date</a></h2>
+<p>The first step in creating the desired data is to rearrange the <tt class="docutils literal">Counter</tt> object.
+We want to go from <tt class="docutils literal">Dict[Tuple[Date, Event], int]</tt> to <tt class="docutils literal">Dict[Date, Dict[Event, int]]</tt>.</p>
+<pre class="literal-block">
+def date_by_event(counts: Counter) -&gt; Dict:
+    &quot;&quot;&quot;
+    Normalize to date, and counts for each event type on that date.
+
+    :param counts: A Counter organized by a [date, event] key pair.
+    :returns: dictionary by date. Each value is a dictionary
+        of {event: count, event: count, ...}
+    &quot;&quot;&quot;
+    by_date = defaultdict(lambda: defaultdict(int))
+    for date, event in counts:
+        by_date[date][event] = counts[date, event]
+    return by_date
+</pre>
+<p>This breaks the functional programming pattern.
+It doesn't create an iterable sequence of (date, Counter) instances.</p>
+<p>A subsequent step is going to sort this data by date. Creating an iterator
+isn't <strong>strictly</strong> necessary, since an in-memory collection (e.g. dictionary)
+will ultimately be needed.</p>
+<p>The SortedContainers provides a handy SortedDict which removes the
+explicit sort step. See <a class="reference external" href="http://www.grantjenks.com/docs/sortedcontainers/index.html">http://www.grantjenks.com/docs/sortedcontainers/index.html</a>.</p>
+</div>
+<div class="section" id="convert-to-running-counts">
+<h2><a class="toc-backref" href="#id18">Convert to Running Counts</a></h2>
+<p>The second step is to convert from daily counts to running counts.</p>
+<p>This algorithm requires sorting by date. It can, therefore, yield
+data as a sequence of row dictionaries with the required data.</p>
+<p>From this</p>
+<pre class="code python literal-block">
+<span class="punctuation">{</span><span class="name">date</span><span class="punctuation">:</span> <span class="punctuation">{</span><span class="name">Event</span><span class="operator">.</span><span class="name">ignore</span><span class="punctuation">:</span> <span class="literal number integer">2</span><span class="punctuation">,</span> <span class="name">Event</span><span class="operator">.</span><span class="name">create</span><span class="punctuation">:</span> <span class="literal number integer">3</span><span class="punctuation">,</span> <span class="name">Event</span><span class="operator">.</span><span class="name">remove</span><span class="punctuation">:</span> <span class="literal number integer">4</span><span class="punctuation">},</span> <span class="operator">...</span><span class="punctuation">}</span>
+</pre>
+<p>To an iterable sequence like this</p>
+<pre class="code python literal-block">
+<span class="punctuation">(</span><span class="name">date</span><span class="punctuation">,</span> <span class="punctuation">{</span><span class="name">Event</span><span class="operator">.</span><span class="name">ignore</span><span class="punctuation">:</span> <span class="literal number integer">2</span><span class="punctuation">,</span> <span class="name">Event</span><span class="operator">.</span><span class="name">create</span><span class="punctuation">:</span> <span class="literal number integer">3</span><span class="punctuation">,</span> <span class="name">Event</span><span class="operator">.</span><span class="name">remove</span><span class="punctuation">:</span> <span class="literal number integer">4</span><span class="punctuation">})</span>
+<span class="operator">...</span>
+</pre>
+<p>We can formalize the input as <tt class="docutils literal">Dict[Date, Dict[Event, int]]</tt>.
+The output is <tt class="docutils literal">Iterator[Tuple[Date, Dict[Event, int]]</tt></p>
+<pre class="literal-block">
+def running_count_iter(by_date_counter: Counter) -&gt; Iterator[Tuple[Date, Counter]]:
+    &quot;&quot;&quot;
+    Convert dict with date keys and sub-dictionaries by event type into
+    a sequence of running totals. The sequence can be used to build a
+    new dictionary. Or written to CSV.
+
+    :param by_date_counter: Dict[date: Dict[event, int]]
+    :returns: a flattened sequence of date, running-total values.
+        This can be used to build a dictionary or flattened for CSV output.
+    &quot;&quot;&quot;
+    running = Counter()
+    for d in sorted(by_date_counter):
+        for event_type in Event:
+            running[event_type] += by_date_counter[d].get(event_type, 0)
+        print(d, running.copy())
+        yield d, running.copy()
+</pre>
+<p>An extension to this can also fill in missing dates to make the plateaus more obvious.
+The iterator would not simply use <tt class="docutils literal">sorted(by_date_counter)</tt>.
+Instead it would iterate from <tt class="docutils literal">min(by_date_counter)</tt> to a given end date,
+default of today. Each date that had data would lead to an update to running
+values. For all dates (even those with no date) the output would be a copy
+of the counter.</p>
+<p>Why is a copy used? We're yielding references to a shared object. If we
+collect all of this into a single list, it would only show the final running
+count on each item of the list.</p>
+</div>
+<div class="section" id="pivot-for-csv-output">
+<h2><a class="toc-backref" href="#id19">Pivot for CSV Output</a></h2>
+<p>The final CSV output can be a dictionary -- for use with a <tt class="docutils literal">DictWriter</tt>.
+Or it can be a simple sequence for use with a <tt class="docutils literal">writer</tt>.</p>
+<p>In this version, we'll create a simple sequence.</p>
+<p>From an iterable sequence like this this</p>
+<pre class="code python literal-block">
+<span class="punctuation">(</span><span class="name">date</span><span class="punctuation">,</span> <span class="punctuation">{</span><span class="name">Event</span><span class="operator">.</span><span class="name">ignore</span><span class="punctuation">:</span> <span class="literal number integer">2</span><span class="punctuation">,</span> <span class="name">Event</span><span class="operator">.</span><span class="name">create</span><span class="punctuation">:</span> <span class="literal number integer">3</span><span class="punctuation">,</span> <span class="name">Event</span><span class="operator">.</span><span class="name">remove</span><span class="punctuation">:</span> <span class="literal number integer">4</span><span class="punctuation">})</span>
+<span class="operator">...</span>
+</pre>
+<p>To an iterable sequence like this</p>
+<pre class="code python literal-block">
+<span class="punctuation">[</span><span class="name">date</span><span class="punctuation">,</span> <span class="literal number integer">3</span><span class="punctuation">,</span> <span class="literal number integer">4</span><span class="punctuation">],</span>
+<span class="punctuation">[</span><span class="operator">...</span><span class="punctuation">]</span>
+</pre>
+<p>Or, more formally, from <tt class="docutils literal">Iterator[Tuple[Date, Dict[Event, int]]</tt> to
+<tt class="docutils literal">Iterator[Tuple[Date, int, <span class="pre">...]]</span></tt>.</p>
+<pre class="literal-block">
+def pivot_for_csv(good_events: List[Event], count_iter: Dict):
+    &quot;&quot;&quot;Flatten for CSV output.
+    &quot;&quot;&quot;
+    return (
+        [date] + [counts.get(event_type, 0) for event_type in good_events]
+        for date, counts in count_iter
+    )
+</pre>
+<p>Of course, this can be turned into some separate lambdas to decompose
+the process.</p>
+<pre class="code python literal-block">
+<span class="name">date</span> <span class="operator">=</span> <span class="keyword">lambda</span> <span class="name">row</span><span class="punctuation">:</span> <span class="name">row</span><span class="punctuation">[</span><span class="literal number integer">0</span><span class="punctuation">]</span>
+<span class="name">counts</span> <span class="operator">=</span> <span class="keyword">lambda</span> <span class="name">row</span><span class="punctuation">:</span> <span class="name">row</span><span class="punctuation">[</span><span class="literal number integer">1</span><span class="punctuation">]</span>
+<span class="name">event_counts</span> <span class="operator">=</span> <span class="keyword">lambda</span> <span class="name">row</span><span class="punctuation">:</span> <span class="name">counts</span><span class="punctuation">(</span><span class="name">row</span><span class="punctuation">)</span><span class="operator">.</span><span class="name">get</span><span class="punctuation">(</span><span class="name">event_type</span><span class="punctuation">,</span> <span class="literal number integer">0</span><span class="punctuation">)</span>
+<span class="name">csv_transform</span> <span class="operator">=</span> <span class="keyword">lambda</span> <span class="name">row</span><span class="punctuation">:</span> <span class="punctuation">[</span><span class="name">date</span><span class="punctuation">(</span><span class="name">row</span><span class="punctuation">)]</span> <span class="operator">+</span> <span class="name builtin">list</span><span class="punctuation">(</span><span class="name builtin">map</span><span class="punctuation">(</span><span class="name">event_counts</span><span class="punctuation">,</span> <span class="name">good_events</span><span class="punctuation">))</span>
+<span class="name builtin">map</span><span class="punctuation">(</span><span class="name">csv_transform</span><span class="punctuation">,</span> <span class="name">count_iter</span><span class="punctuation">)</span>
+</pre>
+<p>The final csv_transform <strong>can</strong> be meaningfully separated from the mapping.
+We might want to use a slightly different transform to create dictionary-based
+row for a <tt class="docutils literal">DictWriter</tt>.</p>
+</div>
+<div class="section" id="velocity-computation-wrap-up">
+<h2><a class="toc-backref" href="#id20">Velocity Computation Wrap-Up</a></h2>
+<p>We have functions to pivot simple counts with a two-part key (date, event).
+into more useful nested counts with date as a key and then event within each date.</p>
+<p>We can turn date-based mappings of raw counts into running counts, emitting
+a sequence of dates and accumulated totals.</p>
+<p>Finally, we have a function to do a final transformation
+so that is written neatly to a CSV file.</p>
+<p>Wait.</p>
+<p>Where was the velocity calculated?</p>
+<p>Actually. It wasn't.</p>
+<p>We emit data with counts by date. We can then use an ordinary least-squares
+tool to compute velocity. The reason why CSV data is the output is (partly)
+to be able to load a spreadsheet with the data and then create charts and
+graphs in the spreadsheet to annotate progress.</p>
+</div>
+</div>
+<div class="section" id="main-script">
+<h1><a class="toc-backref" href="#id21">Main Script</a></h1>
+<p>Let's assemble the pieces. There are four parts:</p>
+<ul class="simple">
+<li><a class="reference internal" href="#prepare">Prepare</a>;</li>
+<li><a class="reference internal" href="#extract">Extract</a>;</li>
+<li><a class="reference internal" href="#analyze">Analyze</a> which includes Transform, Filter, Classify, Reduce; and</li>
+<li><a class="reference internal" href="#report">Report</a>.</li>
+</ul>
+<pre class="literal-block">
+if __name__ == &quot;__main__&quot;:
+</pre>
+<div class="section" id="prepare">
+<h2><a class="toc-backref" href="#id22">Prepare</a></h2>
+<p>We'll need the configuration parameters.
+These are required to create the <tt class="docutils literal">TrelloClient</tt> and the various rules.</p>
+<pre class="literal-block">
+config_filename = &quot;keys.sh&quot;
+config_text = Path(config_filename).read_text()
+config = get_config(config_text)
+</pre>
+<p>The client is needed to get the action documents.</p>
+<pre class="literal-block">
+client = TrelloClient(
+    api_key=config['TRELLO_API_KEY'],
+    api_secret=config['TRELLO_API_SECRET'],
+    token=config['OAUTH_TOKEN'],
+    token_secret=config['OAUTH_TOKEN_SECRET']
+)
+</pre>
+<p>We'll need to get the <tt class="docutils literal">Board</tt> object.
+If the configuration file has a spelling error, we won't find
+the required board. We'll either find too few or too many matches.
+Either of which are a problem.</p>
+<pre class="literal-block">
+boards = list(find_board(client, config['board_name']))
+if len(boards) != 1:
+    sys.exit(f&quot;Couldn't find single board {board_name}&quot;)
+board = boards[0]
+pprint(board)
+</pre>
+<p>Here are the two sets of rules based on reject and finish list names.
+The <tt class="docutils literal">pass_rules</tt> are used to pass interesting cards.
+The <tt class="docutils literal">action_event_rules</tt> are used to classify <tt class="docutils literal">Actions</tt> into <tt class="docutils literal">Events</tt>.</p>
+<pre class="literal-block">
+pass_rules = build_pass_rules(config['reject'].split('|'))
+action_event_rules = build_action_event_rules(config['finished'].split('|'))
+</pre>
+<p>Now that everything's set up, we can gather the raw data.</p>
+</div>
+<div class="section" id="extract">
+<h2><a class="toc-backref" href="#id23">Extract</a></h2>
+<p>Here's the data source iterator over the collection of actions.
+The query, <tt class="docutils literal">actions</tt> is built from the <tt class="docutils literal">action_event_rules</tt> by taking
+the first of the args values from each rule three-tuple.</p>
+<p>We might want to clarify this with <tt class="docutils literal">args = lambda rule: rule[1]</tt>.
+This would lead to <tt class="docutils literal"><span class="pre">args(a)[0]</span></tt> which might be a little less cryptic.</p>
+<p>Also, a namedtuple instead of a simple tuple might ne nicer.</p>
+<pre class="literal-block">
+actions = [a[1][0] for a in action_event_rules]
+raw_actions = action_iter(board, actions, limit=1000)
+</pre>
+<p>This doesn't <strong>actually</strong> do anything. It's a generator which will,
+when the values are consumed, emit each raw action document.</p>
+<p>It includes a portion of the Transformation processing, also.
+One could argue that the transformation should be lifted out
+of the <tt class="docutils literal">action_iter()</tt> and put into the analysis pipeline.
+This is a relatively simple refactoring, and well worth doing
+to see how flexible functional programming can be.</p>
+</div>
+<div class="section" id="analyze">
+<h2><a class="toc-backref" href="#id24">Analyze</a></h2>
+<p>This encompasses Filtering, Classifying, Reducing, and Pivoting the data.</p>
+<ol class="arabic simple">
+<li>Filter Actions using PASS_RULES; Classify Events using ACTION_EVENT_RULES.</li>
+<li>Reduce to counts with a (date, event type) two-tuple key.
+Discard the action detail from the classification output.</li>
+<li>Restructure counts into a table by date.
+Each row has an <tt class="docutils literal">{Event: int, <span class="pre">...}</span></tt> mapping.</li>
+<li>Transform simple by-date counts to running totals.
+We can, as an extra feature, modify this to add missing dates
+to show activity plateaus more clearly.</li>
+</ol>
+<p>We'll break this down into separate steps. The first two do filtering,
+classifying and reducing to counts. The last two pivot the counts
+into the desired output structure.</p>
+<pre class="literal-block">
+date_event_action = action_event_iter(pass_rules, action_event_rules, raw_actions)
+
+date_event_counts = Counter((date, event) for date, event, action in date_event_action)
+
+date_counts = date_by_event(date_event_counts)
+
+running_totals = running_count_iter(date_counts)
+</pre>
+<p>We've filtered, classified, and reduced the raw actions to the running totals.
+We can now report the results in a useful form.</p>
+</div>
+<div class="section" id="report">
+<h2><a class="toc-backref" href="#id25">Report</a></h2>
+<p>We'll write a CSV with only selected summary columns. We compute an ignore
+count, for example, that is not one of the &quot;good&quot; events.</p>
+<pre class="literal-block">
+good_events = list(Event)
+good_events.remove(Event.ignore)
+headers = ['date'] + [et.name for et in good_events]
+</pre>
+<p>We overwrite a single file.</p>
+<pre class="literal-block">
+result = Path(&quot;counts.csv&quot;)
+with result.open('w', newline='') as target:
+    writer = csv.writer(target, delimiter='\t')
+    writer.writerow(headers)
+    writer.writerows(pivot_for_csv(good_events, running_totals))
+</pre>
+<p>Some folks prefer date-stamped output. We can do this pretty easily with
+some <tt class="docutils literal"><span class="pre">f&quot;counts_{now:%Y%m%d}.csv&quot;</span></tt> as the filename.</p>
+</div>
+</div>
+<div class="section" id="conclusion">
+<h1><a class="toc-backref" href="#id26">Conclusion</a></h1>
+<p>We've seen the details of a functional approach to defining processing rules.</p>
+<p>The overall solution decomposes the problem into two broad phases of processing.</p>
+<ul class="simple">
+<li>Extract, Transform, Filter, and Classify operations which work on large volumes
+of data are defined in a functional style. This avoids filling memory with
+data sets of an unworkable size.</li>
+<li>After reducing the data to summary counts, a number of functional transformations
+and pivots can be done to create the desired output. This includes turning simple
+counts into running totals. This is a stateful transformation and requires a
+slightly more complex function definition.</li>
+</ul>
+<p>The use of many (many!) small functions and lambdas allows for flexible restructuring
+of the application to do more or different things with the data.</p>
+<p>Also, the use of a functional style removes many considerations about the state of
+variables, and the consideration of constraints and invariants.</p>
+</div>
+</div>
+</body>
+</html>
