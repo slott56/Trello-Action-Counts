@@ -120,7 +120,7 @@ It will look like this:
     export OAUTH_TOKEN=...
     export OAUTH_TOKEN_SECRET=...
 
-This is the base configuration file required by the Trello-Velocity app.
+This is the base configuration file required by the Trello ``action_counts.py`` app.
     
 Using the Trello Action Counts App
 ==================================
