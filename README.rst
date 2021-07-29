@@ -33,29 +33,18 @@ your own using ``requests``.
 Install
 =======
 
-This uses Python 3.6. You can tweak the app to run in Python 3.5.
+This uses Python >= 3.9.
 
-If you have Python 3.6, away you go.
-
-If you don't yet have Python 3.6, you have two choices.
-
--   Upgrade now.
-
--   Use conda to create a Python 3.6 environment. Start here: https://conda.io/docs/index.html
-
-    ::
-    
-        conda create --name litfunc python=3.5
-        source activate litfunc
-
-Install the supporting code. Two choices.
+Install the supporting code.
 
 -   pip
 
     ::
 
-        pip install py-trello
-        pip install pylit3
+        python -m pip install py-trello
+        python -m pip install pylit3
+        python -m pip install docutils
+        python -m pip install pygments
         
 -   conda
 
@@ -63,20 +52,23 @@ Install the supporting code. Two choices.
     
         conda install py-trello
         conda install pylit3
-    
+        conda install docutils
+        conda install pygments
+
 Finally. Check out the the Trello-Action-Counts repository from Git Hub.
 
-You could install it, but that's not really the point. The point
-is to use this as an example for understanding functional Python
+The Trello-Action-Counts is not avaiable on PyPI for installation.
+There's no `setup.py` because that's not really the point.
+The point is to use this as an example for understanding functional Python
 or literate programming (or both.)
 
-You'll be playing with the source to explore design alternatives.
+The point is to play with the source to explore design alternatives.
 
 Setup Trello Keys
 =================
 
 Visit https://trello.com/1/appKey/generate to get the
-TRELLO_API_KEY and TRELLO_API_SECRET.
+``TRELLO_API_KEY`` and ``TRELLO_API_SECRET``.
 
 Create a little configuration file with a name like ``keys.sh``.
 
@@ -90,7 +82,7 @@ Run the following program to get the OAUTH token.
 
 ::
 
-    $ python3.6 -m trello.util
+    $ python3 -m trello.util
     Request Token:
         - oauth_token        = ...
         - oauth_token_secret = ...
@@ -147,11 +139,14 @@ The ``board_name`` is the name of the board to search for. This must be
 a unique beginning of the board's name.
 
 The ``reject`` value is a |-separated list of list names which are ignored.
+I show two examples ``Reference`` and ``Background``, you'll replaced this with your list names.
 
 The ``finished`` value is a |-separated list of list names which indicated "completed".
+I show two examples, ``Completed`` and ``Approved``. (Why does a project
+team has two completion lists? I don't know, but that's how we were using Trello.)
 
-The counts will ignore all cards in the reject lists. The create count
-and remove count apply to all remaining lists. The finish count is for
+The counts will ignore all cards in the reject lists. The **create** count
+and **remove** count apply to all remaining lists. The finish count is for
 cards moved to the finish list or otherwise closed.
 
 Run The App
@@ -159,7 +154,7 @@ Run The App
 
 ::
 
-    slott$ python3.6 action_counts.py
+    slott$ python3 action_counts.py
 
 This displays log that shows the date-level running totals. It should confirm
 that you're seeing data from your selected board and cards. If not, you can use 
@@ -212,11 +207,13 @@ The PyLit-3 approach to Literate Programming is to have two versions of the sour
     
 The point is that the source code **is** the basis for the documentation.
 
-Here's how to turn the ``.py`` file into ``.py.txt`` and the ``docs/*.html``
+Here's how to turn the ``.py`` file into ``.py.txt``.
+From here you can created the ``docs/*.html``.
+This requires ``docutils`` and ``pygments``.
 
 ::
 
-    slott$ python3.6 -m pylit --codeindent=4 -c action_counts.py
+    slott$ python3 -m pylit --codeindent=4 -c action_counts.py
     extract written to action_counts.py.txt
     slott$ rst2html.py --stylesheet=docs/slott.css action_counts.py.txt docs/action_counts.html
 
@@ -228,7 +225,17 @@ Also, pylit can be used to run the built-in doctest examples in the documentatio
 
 ::
 
-    slott$ python3.6 -m pylit --doctest action_counts.py
+    slott$ python3 -m pylit --doctest action_counts.py
     0 failures in 23 tests
 
 Feel free to add tests as needed.
+
+The project uses ``tox`` to define a test suite using coverage to show
+that more work needs to be done.
+
+::
+
+    python3 -m pyp install tox
+    tox
+
+This runs the test suite including the ``mypy`` analysis.

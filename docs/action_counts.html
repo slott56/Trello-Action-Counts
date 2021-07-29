@@ -3,7 +3,7 @@
 <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
 <head>
 <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
-<meta name="generator" content="Docutils 0.12: http://docutils.sourceforge.net/" />
+<meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
 <title>Compute Velocity -- Stop Starting, Start Finishing</title>
 <style type="text/css">
 
@@ -46,7 +46,7 @@ to perform the overall tasks.</p>
 and finished, grouped by date. This allows simple computations of
 velocity starting and velocity finishing.</p>
 <div class="contents topic" id="contents">
-<p class="topic-title first">Contents</p>
+<p class="topic-title">Contents</p>
 <ul class="simple">
 <li><a class="reference internal" href="#module-docstring" id="id1">Module Docstring</a></li>
 <li><a class="reference internal" href="#trello-data-access" id="id2">Trello Data Access</a></li>
@@ -94,12 +94,12 @@ Given a board name, count actions to get a raw &quot;create&quot; and &quot;fini
 
 This involves several kinds of functional-programming mappings.
 
--   From trello document to an internal Action named tuple.
+-   From trello document to an internal Action namedtuple.
 
     This uses a collection of individual functions (some expressed as lambdas)
     to build each attribute of the ``Action`` object.
 
--   Some lists are filtered to exclude them.
+-   Some lists are filtered to exclude contents of the list.
 
     This uses a collection of individual functions to determine which lists
     to pass and which to reject. The idea is that a simple list of functions
@@ -134,7 +134,7 @@ And <a class="reference external" href="https://pypi.python.org/pypi/py-trello/0
 <p>Generally, we're interested in all events for a given board.
 Therefore, the <tt class="docutils literal">Board</tt> class definition is what we'll focus on.</p>
 <p>Boards have actions. They also have lists.</p>
-<p>Often, the have distinct semantics. We recognize three kinds of lists.</p>
+<p>Often, lists have distinct semantics. We recognize three kinds of lists.</p>
 <ul class="simple">
 <li>Reference data or Ungroomed Backlog.
 The cards in these lists are neither stories nor tasks.
@@ -145,10 +145,6 @@ stories. This gives the &quot;finishing&quot; rate.</li>
 This gives the &quot;starting&quot; rate.</li>
 </ul>
 <p>The point, after all this analysis, is to stop starting and start finishing.</p>
-<pre class="literal-block">
-from trello import TrelloClient
-from trello.board import Board
-</pre>
 </div>
 <div class="section" id="imports">
 <h1><a class="toc-backref" href="#id3">Imports</a></h1>
@@ -164,22 +160,36 @@ from pprint import pprint
 import re
 import sys
 </pre>
-<p>We'll use some type hints. We haven't provided complete
-type hinting because it's a little difficult to define some
-of the more complex functions.</p>
+<p>We'll use some type hints to get to a successfully strict
+set of hints.</p>
 <pre class="literal-block">
-from typing import (List, Dict, Iterator, List, Tuple, Callable, Union, NewType)
+from typing import (
+    List, Dict, Tuple,
+    Iterator, Iterable, Callable, Union, NewType, Any,
+    TypeVar,
+    Callable,
+    DefaultDict,
+    NamedTuple,
+    cast,
+)
+</pre>
+<p>The Trello libraries. These lack hints.</p>
+<pre class="literal-block">
+from trello import TrelloClient  # type: ignore [import]
+from trello.board import Board  # type: ignore [import]
 </pre>
 <p>Here are a few functions to help with functional programming.</p>
 <p>A function we can use to pluck the first
 item from an iterable. This seems better than using
 <tt class="docutils literal">itertools.take(1, iterable)</tt></p>
 <pre class="literal-block">
-first = lambda iterable: next(iterable)
+T_ = TypeVar(&quot;T_&quot;)
+
+first: Callable[[Iterator[T_]], T_] = lambda iterable: next(iterable)
 </pre>
 <p>Another function to slightly simplify filtering data.</p>
 <pre class="literal-block">
-non_none = lambda iterable: filter(None, iterable)
+non_none: Callable[[Iterable[T_]], Iterator[T_]] = lambda iterable: filter(None, iterable)
 </pre>
 </div>
 <div class="section" id="parse-a-configuration-file">
@@ -202,7 +212,7 @@ variable settings. Here's what the <tt class="docutils literal">keys.sh</tt> fil
 described in the README.rst.</p>
 <p>In order to get the OATH token and secret, we must run the following command:</p>
 <pre class="code bash literal-block">
-$ python3.6 -m trello.util
+$ python3 -m trello.util
 </pre>
 <p>This command requires the <tt class="docutils literal">TRELLO_API_KEY</tt> and <tt class="docutils literal">TRELLO_API_SECRET</tt>
 as environment variables. We could set the manually, but
@@ -223,7 +233,7 @@ def get_config(config_text: str) -&gt; Dict[str, str]:
     line_pat = re.compile(r'(?:export\s+)?(\w+)=(.*)')
     matches = map(line_pat.match, config_text.splitlines())
     config = {
-        m.group(1): m.group(2) for m in matches
+        m.group(1): m.group(2) for m in matches if m
     }
     return config
 </pre>
@@ -243,18 +253,18 @@ support exploration of a Trello account and board to locate
 the proper names for lists.</p>
 <p>Get a list of all boards accessible with the given credentials.</p>
 <pre class="literal-block">
-def board_list(client: TrelloClient):
+def board_list(client: TrelloClient) -&gt; None:
     &quot;&quot;&quot;
     Given the client, print all boards.
 
     :param client: The connected TrelloClient instance.
     &quot;&quot;&quot;
     for b in client.list_boards():
-        print(n.name)
+        print(b.name)
 </pre>
 <p>Get a list of all lists on a given board.</p>
 <pre class="literal-block">
-def list_list(client: TrelloClient, board_name: str):
+def list_list(client: TrelloClient, board_name: str) -&gt; None:
     &quot;&quot;&quot;
     Given a client and a board name, print all lists on that board.
 
@@ -297,14 +307,17 @@ document.</p>
 <p>We also include the original (&quot;raw&quot;) action document as an aid for
 debugging.</p>
 <pre class="literal-block">
-Action = namedtuple('Action', ['date', 'action', 'card', 'list', 'raw'])
+class Action(NamedTuple):
+    date: datetime.date
+    action: str
+    card: str
+    list: str
+    raw: dict[str, Any]
 </pre>
 <p>We've made them namedtuples because they're immutable. They expose
-certain data attributes.</p>
-<p>Why not use a class with <tt class="docutils literal">&#64;property</tt> methods to compute derived values?</p>
-<p>Good question. That's an elegant alternative.</p>
-<p>However, the immutability of the tuple is appealing. This is not stateful
-data. It's a historical record. For this kind of analysis, a simple <tt class="docutils literal">map()</tt>
+certain data attributes.
+This is not stateful data.
+It's a historical record. For this kind of analysis, a simple <tt class="docutils literal">map()</tt>
 to transform source documents to <tt class="docutils literal">Action</tt> instances seems like the ideal
 solution.</p>
 <p>There are two parts to building the sequence of <tt class="docutils literal">Action</tt> instances.</p>
@@ -325,7 +338,7 @@ a local date.</li>
 </ul>
 <pre class="literal-block">
 UTC_FORMAT = &quot;%Y-%m-%dT%H:%M:%S.%fZ&quot;
-make_action_date = (lambda document:
+make_action_date: Callable[[dict[str, str]], datetime.date] = (lambda document:
     datetime.datetime
     .strptime(document['date'], UTC_FORMAT)
     .replace(tzinfo=datetime.timezone.utc)
@@ -336,14 +349,14 @@ make_action_date = (lambda document:
 <li><strong>action</strong>. A copy of a field without any transformation.</li>
 </ul>
 <pre class="literal-block">
-make_action_action = lambda document: document['type']
+make_action_action: Callable[[dict[str, str]], str] = lambda document: document['type']
 </pre>
 <ul class="simple">
 <li><strong>card</strong>.  The name or the ID of a card. Not all cards have names.
 This is confusing as a lambda. So it's defined as a function.</li>
 </ul>
 <pre class="literal-block">
-def make_action_card(document : Dict) -&gt; bool:
+def make_action_card(document : dict[str, dict[str, dict[str, str]]]) -&gt; str:
     if 'name' in document['data']['card']:
         # Creates/Moves
         return document['data']['card']['name']
@@ -357,16 +370,21 @@ look in the action document.</p>
 <p>Since the entire document is available, we could use <tt class="docutils literal"><span class="pre">document['type']</span></tt>
 to distinguish the two cases. It's simpler, however, to simply look in
 all of the usual places for the information, since there are only two choices.</p>
+<p>It's unclear what other actions we need to process; we'll consider the others
+as uniformly <tt class="docutils literal">False</tt>.</p>
 </li>
 </ul>
 <pre class="literal-block">
-def make_action_list(document : Dict) -&gt; bool:
+def make_action_list(document : dict[str, dict[str, dict[str, str]]]) -&gt; str:
     if 'list' in document['data']:
         # Creates/Deletes
         return document['data']['list']['name']
     elif 'listAfter' in document['data']:
         # Moves
         return document['data']['listAfter']['name']
+    else:
+        # Perhaps we should raise an exception?
+        return &quot;&quot;
 </pre>
 <p>We'll use all of these field-level transformation functions to generate
 the required <tt class="docutils literal">Action</tt> instance.</p>
@@ -384,7 +402,7 @@ can be very fast and still functionally focused with no stateful processing.</p>
 from the <tt class="docutils literal">Action</tt> namedtuple is paired with a function that
 builds that field from the source document.</p>
 <pre class="literal-block">
-ACTION_FIELD_MAP = {
+ACTION_FIELD_MAP: dict[str, Callable[..., Any]] = {
     'date': make_action_date,
     'action': make_action_action,
     'card': make_action_card,
@@ -398,8 +416,10 @@ We aren't strictly DRY about this. A change to this mapping
 will require a change to the namedtuple function above.</p>
 <p>Given this set of fields, we can then apply each
 function to the source document and build an Action instance.</p>
+<p>This is sometimes implemented as a static method of the <tt class="docutils literal">Action</tt> class.
+It's also sometimes implemented as a <tt class="docutils literal">__post_init__()</tt> method of a dataclass.</p>
 <pre class="literal-block">
-def make_action(raw_action : Dict) -&gt; Action:
+def make_action(raw_action : dict[str, Any]) -&gt; Action:
     return Action(
         **{field: transform(raw_action) for field, transform in ACTION_FIELD_MAP.items()}
     )
@@ -411,12 +431,10 @@ def make_action(raw_action : Dict) -&gt; Action:
 <li>The result is a dictionary that has the structure required by the <tt class="docutils literal">Action</tt> namedtuple.</li>
 <li>We transform this into an <tt class="docutils literal">Action</tt> instance.</li>
 </ol>
-<p>This function could be restated as <tt class="docutils literal">lambda raw_action: <span class="pre">Action(**{...})</span></tt>.</p>
-<p>The useful sequence of <tt class="docutils literal">Action</tt> instances is a mapping of the
-<tt class="docutils literal">make_action</tt> function to the source of action documents from the
-Trello board.</p>
+<p>The point behind this function is to apply it to a board to
+emit <tt class="docutils literal">Action</tt> documents for analysis.</p>
 <pre class="literal-block">
-def action_iter(board: Board, actions: List[str], limit=100) -&gt; Iterator[Action]:
+def action_iter(board: Board, actions: list[str], limit: int = 100) -&gt; Iterator[Action]:
     &quot;&quot;&quot;
     Iterate over all matching actions on this board.
 
@@ -436,7 +454,7 @@ def action_iter(board: Board, actions: List[str], limit=100) -&gt; Iterator[Acti
 The goal is to be able to do this:</p>
 <pre class="code python literal-block">
 <span class="keyword">for</span> <span class="name">action</span> <span class="operator word">in</span> <span class="name">action_iter</span><span class="punctuation">(</span><span class="name">Board</span><span class="punctuation">,</span> <span class="punctuation">[</span><span class="literal string single">'createCard'</span><span class="punctuation">,</span> <span class="operator">...</span><span class="punctuation">]):</span>
-    <span class="name">summarize</span> <span class="name">the</span> <span class="literal string backtick">``</span><span class="name">Action</span><span class="literal string backtick">``</span> <span class="name">instance</span><span class="operator">.</span>
+    <span class="name">summarize</span> <span class="name">the</span> <span class="error">``</span><span class="name">Action</span><span class="error">``</span> <span class="name">instance</span><span class="operator">.</span>
 </pre>
 <p>We provide a Trello <tt class="docutils literal">Board</tt> instance and a list of actions to query.
 This</p>
@@ -487,7 +505,7 @@ for the raw action names that are defined by Trello.</p>
 <p>The action type might be <tt class="docutils literal">&quot;updateCard&quot;</tt>. The query might be <tt class="docutils literal">&quot;updateCard:closed&quot;</tt>.</p>
 <p>We'll parse the action from the query-sting version of an action type.</p>
 <pre class="literal-block">
-parse_action = lambda type_text: type_text.partition(':')[0]
+parse_action: Callable[[str], str] = lambda type_text: type_text.partition(':')[0]
 </pre>
 <pre class="code python literal-block">
 <span class="operator">&gt;&gt;&gt;</span> <span class="keyword namespace">from</span> <span class="name namespace">action_counts</span> <span class="keyword namespace">import</span> <span class="operator">*</span>
@@ -530,30 +548,49 @@ and the resulting event.</p>
 makes the final match decision.
 This first-wave function is subsequently applied to the <tt class="docutils literal">action</tt> argument
 for filtering or mapping to an event type.</p>
+<p>Some of the rule types require the run-time input of the specific
+lists which count as finished. We do this last-minute binding in a function
+that emits a list of rules, some of which have the list names injected into them.</p>
+<pre class="literal-block">
+Match_Args = Union[Tuple[str], Tuple[str, List[str]]]
+Filter_Action = Callable[[Action], bool]
+Match_Rule = Union[
+    Callable[[str], Filter_Action],
+    Callable[[str, List[str]], Filter_Action],
+]
+</pre>
+<dl class="docutils">
+<dt>While this would be pleasant, it doesn't work:</dt>
+<dd><tt class="docutils literal">Match_Rule = <span class="pre">Callable[[*Match_Args],</span> Filter_Action]</tt></dd>
+</dl>
+<pre class="literal-block">
+Classifier_Rule_List = List[Tuple[Match_Rule, Match_Args, Event]]
+</pre>
+<p>This was once part of the code, but appears not used... <tt class="docutils literal">Match_Action = <span class="pre">Callable[[Action],</span> Event]</tt>.</p>
 <p>There are several rule types:</p>
 <ul class="simple">
 <li>Matches if the text of the action type matches the <tt class="docutils literal">Action.action</tt> field.</li>
 </ul>
 <pre class="literal-block">
-MATCH_ACTION_TYPE = lambda type_text: lambda action: action.action == type_text
+MATCH_ACTION_TYPE: Match_Rule = lambda type_text: lambda action: action.action == type_text
 </pre>
 <ul class="simple">
 <li>Matches if the <tt class="docutils literal">Action.list</tt> field is in the target lists.</li>
 </ul>
 <pre class="literal-block">
-MATCH_IN_LIST = lambda list_names: lambda action: action.list in list_names
+MATCH_IN_LIST: Match_Rule = lambda list_names: lambda action: action.list in list_names
 </pre>
 <ul class="simple">
 <li>Matches if the <tt class="docutils literal">Action.list</tt> field is not in the target lists.</li>
 </ul>
 <pre class="literal-block">
-MATCH_NOT_LIST = lambda list_names: lambda action: action.list not in list_names
+MATCH_NOT_LIST: Match_Rule = lambda list_names: lambda action: action.list not in list_names
 </pre>
 <ul class="simple">
 <li>Matches if the <tt class="docutils literal">Action.action</tt> text and the <tt class="docutils literal">Action.list</tt> is in the target lists.</li>
 </ul>
 <pre class="literal-block">
-MATCH_ACTION_TYPE_IN_LIST = (lambda type_text, list_names:
+MATCH_ACTION_TYPE_IN_LIST: Match_Rule = (lambda type_text, list_names:
     lambda action: action.action == parse_action(type_text) and action.list in list_names
     )
 </pre>
@@ -561,21 +598,11 @@ MATCH_ACTION_TYPE_IN_LIST = (lambda type_text, list_names:
 <li>Matches if the <tt class="docutils literal">Action.action</tt> text and the <tt class="docutils literal">Action.list</tt> is not in the target lists.</li>
 </ul>
 <pre class="literal-block">
-MATCH_ACTION_TYPE_NOT_LIST = (lambda type_text, list_names:
+MATCH_ACTION_TYPE_NOT_LIST: Match_Rule = (lambda type_text, list_names:
     lambda action: action.action == parse_action(type_text) and action.list not in list_names
     )
-</pre>
-<p>Some of the above rule types require the run-time input of the specific
-lists which count as finished. We do this last-minute binding in a function
-that emits a list of rules, some of which have the list names injected into them.</p>
-<pre class="literal-block">
-Match_Args = Union[Tuple[str], Tuple[str, List[str]]]
-Match_Action = Callable[[Action], Event]
-Match_Rule = Callable[[Match_Args], Match_Action]
 
-Classifier_Rule_List = List[Tuple[Match_Rule, Match_Args, Event]]
-
-def build_action_event_rules(finished_lists: List[str]) -&gt; Classifier_Rule_List:
+def build_action_event_rules(finished_lists: list[str]) -&gt; Classifier_Rule_List:
     &quot;&quot;&quot;
     Build the Action-&gt;Event mapping rules. This requires injecting
     the finished list into the rules.
@@ -614,11 +641,11 @@ action query.</p>
 <span class="operator">&gt;&gt;&gt;</span> <span class="keyword namespace">from</span> <span class="name namespace">action_counts</span> <span class="keyword namespace">import</span> <span class="operator">*</span>
 <span class="operator">&gt;&gt;&gt;</span> <span class="name">finished_lists</span> <span class="operator">=</span> <span class="punctuation">[</span><span class="literal string single">'Some List'</span><span class="punctuation">]</span>
 <span class="operator">&gt;&gt;&gt;</span> <span class="name">EVENT_RULES</span> <span class="operator">=</span> <span class="name">build_action_event_rules</span><span class="punctuation">(</span><span class="name">finished_lists</span><span class="punctuation">)</span>
-<span class="operator">&gt;&gt;&gt;</span> <span class="name">action</span> <span class="operator">=</span> <span class="name">Action</span><span class="punctuation">(</span><span class="literal string single">'date'</span><span class="punctuation">,</span> <span class="literal string single">'copyCard'</span><span class="punctuation">,</span> <span class="literal string single">'card'</span><span class="punctuation">,</span> <span class="literal string single">'Some List'</span><span class="punctuation">,</span> <span class="name builtin pseudo">None</span><span class="punctuation">)</span>
-<span class="operator">&gt;&gt;&gt;</span> <span class="name builtin">list</span><span class="punctuation">(</span><span class="name builtin">filter</span><span class="punctuation">(</span><span class="name builtin pseudo">None</span><span class="punctuation">,</span> <span class="punctuation">(</span><span class="name">rule_type</span><span class="punctuation">(</span><span class="operator">*</span><span class="name">args</span><span class="punctuation">)(</span><span class="name">action</span><span class="punctuation">)</span> <span class="operator word">and</span> <span class="name">event</span> <span class="keyword">for</span> <span class="name">rule_type</span><span class="punctuation">,</span> <span class="name">args</span><span class="punctuation">,</span> <span class="name">event</span> <span class="operator word">in</span> <span class="name">EVENT_RULES</span><span class="punctuation">)))</span>
+<span class="operator">&gt;&gt;&gt;</span> <span class="name">action</span> <span class="operator">=</span> <span class="name">Action</span><span class="punctuation">(</span><span class="literal string single">'date'</span><span class="punctuation">,</span> <span class="literal string single">'copyCard'</span><span class="punctuation">,</span> <span class="literal string single">'card'</span><span class="punctuation">,</span> <span class="literal string single">'Some List'</span><span class="punctuation">,</span> <span class="keyword constant">None</span><span class="punctuation">)</span>
+<span class="operator">&gt;&gt;&gt;</span> <span class="name builtin">list</span><span class="punctuation">(</span><span class="name builtin">filter</span><span class="punctuation">(</span><span class="keyword constant">None</span><span class="punctuation">,</span> <span class="punctuation">(</span><span class="name">rule_type</span><span class="punctuation">(</span><span class="operator">*</span><span class="name">args</span><span class="punctuation">)(</span><span class="name">action</span><span class="punctuation">)</span> <span class="operator word">and</span> <span class="name">event</span> <span class="keyword">for</span> <span class="name">rule_type</span><span class="punctuation">,</span> <span class="name">args</span><span class="punctuation">,</span> <span class="name">event</span> <span class="operator word">in</span> <span class="name">EVENT_RULES</span><span class="punctuation">)))</span>
 <span class="punctuation">[</span><span class="operator">&lt;</span><span class="name">Event</span><span class="operator">.</span><span class="name">create</span><span class="punctuation">:</span> <span class="literal number integer">2</span><span class="operator">&gt;</span><span class="punctuation">]</span>
-<span class="operator">&gt;&gt;&gt;</span> <span class="name">action</span> <span class="operator">=</span> <span class="name">Action</span><span class="punctuation">(</span><span class="literal string single">'date'</span><span class="punctuation">,</span> <span class="literal string single">'updateCard'</span><span class="punctuation">,</span> <span class="literal string single">'card'</span><span class="punctuation">,</span> <span class="literal string single">'Some List'</span><span class="punctuation">,</span> <span class="name builtin pseudo">None</span><span class="punctuation">)</span>
-<span class="operator">&gt;&gt;&gt;</span> <span class="name builtin">list</span><span class="punctuation">(</span><span class="name builtin">filter</span><span class="punctuation">(</span><span class="name builtin pseudo">None</span><span class="punctuation">,</span> <span class="punctuation">(</span><span class="name">rule_type</span><span class="punctuation">(</span><span class="operator">*</span><span class="name">args</span><span class="punctuation">)(</span><span class="name">action</span><span class="punctuation">)</span> <span class="operator word">and</span> <span class="name">event</span> <span class="keyword">for</span> <span class="name">rule_type</span><span class="punctuation">,</span> <span class="name">args</span><span class="punctuation">,</span> <span class="name">event</span> <span class="operator word">in</span> <span class="name">EVENT_RULES</span><span class="punctuation">)))</span>
+<span class="operator">&gt;&gt;&gt;</span> <span class="name">action</span> <span class="operator">=</span> <span class="name">Action</span><span class="punctuation">(</span><span class="literal string single">'date'</span><span class="punctuation">,</span> <span class="literal string single">'updateCard'</span><span class="punctuation">,</span> <span class="literal string single">'card'</span><span class="punctuation">,</span> <span class="literal string single">'Some List'</span><span class="punctuation">,</span> <span class="keyword constant">None</span><span class="punctuation">)</span>
+<span class="operator">&gt;&gt;&gt;</span> <span class="name builtin">list</span><span class="punctuation">(</span><span class="name builtin">filter</span><span class="punctuation">(</span><span class="keyword constant">None</span><span class="punctuation">,</span> <span class="punctuation">(</span><span class="name">rule_type</span><span class="punctuation">(</span><span class="operator">*</span><span class="name">args</span><span class="punctuation">)(</span><span class="name">action</span><span class="punctuation">)</span> <span class="operator word">and</span> <span class="name">event</span> <span class="keyword">for</span> <span class="name">rule_type</span><span class="punctuation">,</span> <span class="name">args</span><span class="punctuation">,</span> <span class="name">event</span> <span class="operator word">in</span> <span class="name">EVENT_RULES</span><span class="punctuation">)))</span>
 <span class="punctuation">[</span><span class="operator">&lt;</span><span class="name">Event</span><span class="operator">.</span><span class="name">finish</span><span class="punctuation">:</span> <span class="literal number integer">4</span><span class="operator">&gt;</span><span class="punctuation">,</span> <span class="operator">&lt;</span><span class="name">Event</span><span class="operator">.</span><span class="name">finish</span><span class="punctuation">:</span> <span class="literal number integer">4</span><span class="operator">&gt;</span><span class="punctuation">]</span>
 </pre>
 <p>Given an <tt class="docutils literal">Action</tt> instance, all of the rules in <tt class="docutils literal">EVENT_RULES</tt> are applied.
@@ -640,13 +667,22 @@ applied early in the process to limit the number of <tt class="docutils literal"
 are considered.</p>
 <p>We can think about this as rejecting certain lists.
 Or we can think about passing all lists which are not those reject lists.</p>
+<p>We'll use type hints similar to the Match_Rule hints. These are somewhat
+simpler in that we don't have a query string, merely a list of list names.</p>
+<p>So far, there's only one rule. The generalization of this one rule
+seems like quite a bit of overhead. It allows flexibility, and it
+reveals some paralellisms between filtering and transforming <tt class="docutils literal">Action</tt> instances.</p>
 <pre class="literal-block">
-Pass_Rule_List = List[Tuple[Match_Rule, Tuple[List[str]]]]
+Pass_Args = Tuple[List[str]]
+Pass_Rule = Callable[[List[str]], Filter_Action]
 
-def build_pass_rules(reject_lists: List[str]) -&gt; Pass_Rule_List:
+Pass_Rule_List = List[Tuple[Pass_Rule, Pass_Args]]
+
+def build_pass_rules(reject_lists: list[str]) -&gt; Pass_Rule_List:
     &quot;&quot;&quot;
     Build the Action rejection rules. This requires injecting
-    the reject list into the rules.
+    the reject list into each rule to create a partial function.
+    The function can then be applied to the ``Action``.
 
     The idea is that **all** rules must return True to process the row
     further. Any False is rejection.
@@ -655,7 +691,7 @@ def build_pass_rules(reject_lists: List[str]) -&gt; Pass_Rule_List:
     :returns: sequence of two-tuples with rule function, configuration args.
     &quot;&quot;&quot;
     return [
-        (MATCH_NOT_LIST, (reject_lists,)),
+        (cast(Pass_Rule, MATCH_NOT_LIST), (reject_lists,)),
     ]
 </pre>
 <p>We might have several criteria required for passing.</p>
@@ -665,18 +701,18 @@ we can add rules easily.</p>
 <span class="operator">&gt;&gt;&gt;</span> <span class="keyword namespace">from</span> <span class="name namespace">action_counts</span> <span class="keyword namespace">import</span> <span class="operator">*</span>
 <span class="operator">&gt;&gt;&gt;</span> <span class="name">reject_lists</span> <span class="operator">=</span> <span class="punctuation">[</span><span class="literal string single">'Reject This List'</span><span class="punctuation">]</span>
 <span class="operator">&gt;&gt;&gt;</span> <span class="name">PASS_RULES</span> <span class="operator">=</span> <span class="name">build_pass_rules</span><span class="punctuation">(</span><span class="name">reject_lists</span><span class="punctuation">)</span>
-<span class="operator">&gt;&gt;&gt;</span> <span class="name">action1</span> <span class="operator">=</span> <span class="name">Action</span><span class="punctuation">(</span><span class="literal string single">'date'</span><span class="punctuation">,</span> <span class="literal string single">'action'</span><span class="punctuation">,</span> <span class="literal string single">'card'</span><span class="punctuation">,</span> <span class="literal string single">'Reject This List'</span><span class="punctuation">,</span> <span class="name builtin pseudo">None</span><span class="punctuation">)</span>
+<span class="operator">&gt;&gt;&gt;</span> <span class="name">action1</span> <span class="operator">=</span> <span class="name">Action</span><span class="punctuation">(</span><span class="literal string single">'date'</span><span class="punctuation">,</span> <span class="literal string single">'action'</span><span class="punctuation">,</span> <span class="literal string single">'card'</span><span class="punctuation">,</span> <span class="literal string single">'Reject This List'</span><span class="punctuation">,</span> <span class="keyword constant">None</span><span class="punctuation">)</span>
 <span class="operator">&gt;&gt;&gt;</span> <span class="name builtin">all</span><span class="punctuation">(</span><span class="name">rule_type</span><span class="punctuation">(</span><span class="operator">*</span><span class="name">args</span><span class="punctuation">)(</span><span class="name">action1</span><span class="punctuation">)</span> <span class="keyword">for</span> <span class="name">rule_type</span><span class="punctuation">,</span> <span class="name">args</span> <span class="operator word">in</span> <span class="name">PASS_RULES</span><span class="punctuation">)</span>
-<span class="name builtin pseudo">False</span>
-<span class="operator">&gt;&gt;&gt;</span> <span class="name">action2</span> <span class="operator">=</span> <span class="name">Action</span><span class="punctuation">(</span><span class="literal string single">'date'</span><span class="punctuation">,</span> <span class="literal string single">'action'</span><span class="punctuation">,</span> <span class="literal string single">'card'</span><span class="punctuation">,</span> <span class="literal string single">'Another List'</span><span class="punctuation">,</span> <span class="name builtin pseudo">None</span><span class="punctuation">)</span>
+<span class="keyword constant">False</span>
+<span class="operator">&gt;&gt;&gt;</span> <span class="name">action2</span> <span class="operator">=</span> <span class="name">Action</span><span class="punctuation">(</span><span class="literal string single">'date'</span><span class="punctuation">,</span> <span class="literal string single">'action'</span><span class="punctuation">,</span> <span class="literal string single">'card'</span><span class="punctuation">,</span> <span class="literal string single">'Another List'</span><span class="punctuation">,</span> <span class="keyword constant">None</span><span class="punctuation">)</span>
 <span class="operator">&gt;&gt;&gt;</span> <span class="name builtin">all</span><span class="punctuation">(</span><span class="name">rule_type</span><span class="punctuation">(</span><span class="operator">*</span><span class="name">args</span><span class="punctuation">)(</span><span class="name">action2</span><span class="punctuation">)</span> <span class="keyword">for</span> <span class="name">rule_type</span><span class="punctuation">,</span> <span class="name">args</span> <span class="operator word">in</span> <span class="name">PASS_RULES</span><span class="punctuation">)</span>
-<span class="name builtin pseudo">True</span>
+<span class="keyword constant">True</span>
 
 <span class="operator">&gt;&gt;&gt;</span> <span class="name">raw_actions</span> <span class="operator">=</span> <span class="punctuation">[</span><span class="name">action1</span><span class="punctuation">,</span> <span class="name">action2</span><span class="punctuation">]</span>
 <span class="operator">&gt;&gt;&gt;</span> <span class="name">reject</span> <span class="operator">=</span> <span class="keyword">lambda</span> <span class="name">action</span><span class="punctuation">:</span> <span class="name builtin">all</span><span class="punctuation">(</span><span class="name">rule_type</span><span class="punctuation">(</span><span class="operator">*</span><span class="name">args</span><span class="punctuation">)(</span><span class="name">action</span><span class="punctuation">)</span> <span class="keyword">for</span> <span class="name">rule_type</span><span class="punctuation">,</span> <span class="name">args</span> <span class="operator word">in</span> <span class="name">PASS_RULES</span><span class="punctuation">)</span>
 <span class="operator">&gt;&gt;&gt;</span> <span class="name">passed_actions</span> <span class="operator">=</span> <span class="name builtin">filter</span><span class="punctuation">(</span><span class="name">reject</span><span class="punctuation">,</span> <span class="name">raw_actions</span><span class="punctuation">)</span>
 <span class="operator">&gt;&gt;&gt;</span> <span class="name builtin">list</span><span class="punctuation">(</span><span class="name">passed_actions</span><span class="punctuation">)</span>
-<span class="punctuation">[</span><span class="name">Action</span><span class="punctuation">(</span><span class="name">date</span><span class="operator">=</span><span class="literal string single">'date'</span><span class="punctuation">,</span> <span class="name">action</span><span class="operator">=</span><span class="literal string single">'action'</span><span class="punctuation">,</span> <span class="name">card</span><span class="operator">=</span><span class="literal string single">'card'</span><span class="punctuation">,</span> <span class="name builtin">list</span><span class="operator">=</span><span class="literal string single">'Another List'</span><span class="punctuation">,</span> <span class="name">raw</span><span class="operator">=</span><span class="name builtin pseudo">None</span><span class="punctuation">)]</span>
+<span class="punctuation">[</span><span class="name">Action</span><span class="punctuation">(</span><span class="name">date</span><span class="operator">=</span><span class="literal string single">'date'</span><span class="punctuation">,</span> <span class="name">action</span><span class="operator">=</span><span class="literal string single">'action'</span><span class="punctuation">,</span> <span class="name">card</span><span class="operator">=</span><span class="literal string single">'card'</span><span class="punctuation">,</span> <span class="name builtin">list</span><span class="operator">=</span><span class="literal string single">'Another List'</span><span class="punctuation">,</span> <span class="name">raw</span><span class="operator">=</span><span class="keyword constant">None</span><span class="punctuation">)]</span>
 </pre>
 </div>
 <div class="section" id="action-to-event-mapping">
@@ -704,10 +740,11 @@ def action_event_iter(pass_rules: Pass_Rule_List,
     :returns: Iterator over (date, event type, action) triples.
     &quot;&quot;&quot;
     # Remove the cards on any of the reject lists.
-    pass_filter = lambda action: all(rule_type(*args)(action) for rule_type, args in pass_rules)
+    rule_partials = (rule_type(*args) for rule_type, args in pass_rules)
+    pass_filter: Callable[[Action], bool] = lambda action: all(rule(action) for rule in rule_partials)
 
     # Create a list of (date, event) pairs for each rule that matches.
-    # Ideally, only one item in the list, and we take that one item.
+    # Ideally, there's exactly one item in the list, and we take that one item.
     # Since 0 or many matches are problems, a variation on :func:`first` might be appropriate.
     classify = (lambda action:
         first(
@@ -847,7 +884,7 @@ plucked from each tuple.  We wind up with a <tt class="docutils literal">Dict[Tu
 <p>The first step in creating the desired data is to rearrange the <tt class="docutils literal">Counter</tt> object.
 We want to go from <tt class="docutils literal">Dict[Tuple[Date, Event], int]</tt> to <tt class="docutils literal">Dict[Date, Dict[Event, int]]</tt>.</p>
 <pre class="literal-block">
-def date_by_event(counts: Counter) -&gt; Dict:
+def date_by_event(counts: Counter[tuple[Date, Event]]) -&gt; DefaultDict[Date, dict[Event, int]]:
     &quot;&quot;&quot;
     Normalize to date, and counts for each event type on that date.
 
@@ -855,7 +892,7 @@ def date_by_event(counts: Counter) -&gt; Dict:
     :returns: dictionary by date. Each value is a dictionary
         of {event: count, event: count, ...}
     &quot;&quot;&quot;
-    by_date = defaultdict(lambda: defaultdict(int))
+    by_date: DefaultDict[Date, dict[Event, int]] = defaultdict(lambda: defaultdict(int))
     for date, event in counts:
         by_date[date][event] = counts[date, event]
     return by_date
@@ -885,7 +922,7 @@ data as a sequence of row dictionaries with the required data.</p>
 <p>We can formalize the input as <tt class="docutils literal">Dict[Date, Dict[Event, int]]</tt>.
 The output is <tt class="docutils literal">Iterator[Tuple[Date, Dict[Event, int]]</tt></p>
 <pre class="literal-block">
-def running_count_iter(by_date_counter: Counter) -&gt; Iterator[Tuple[Date, Counter]]:
+def running_count_iter(by_date_counter: Dict[Date, Dict[Event, int]]) -&gt; Iterator[Tuple[Date, Counter[Event]]]:
     &quot;&quot;&quot;
     Convert dict with date keys and sub-dictionaries by event type into
     a sequence of running totals. The sequence can be used to build a
@@ -895,7 +932,7 @@ def running_count_iter(by_date_counter: Counter) -&gt; Iterator[Tuple[Date, Coun
     :returns: a flattened sequence of date, running-total values.
         This can be used to build a dictionary or flattened for CSV output.
     &quot;&quot;&quot;
-    running = Counter()
+    running: Counter[Event] = Counter()
     for d in sorted(by_date_counter):
         for event_type in Event:
             running[event_type] += by_date_counter[d].get(event_type, 0)
@@ -928,13 +965,13 @@ Or it can be a simple sequence for use with a <tt class="docutils literal">write
 <span class="punctuation">[</span><span class="operator">...</span><span class="punctuation">]</span>
 </pre>
 <p>Or, more formally, from <tt class="docutils literal">Iterator[Tuple[Date, Dict[Event, int]]</tt> to
-<tt class="docutils literal">Iterator[Tuple[Date, int, <span class="pre">...]]</span></tt>.</p>
+<tt class="docutils literal">Iterator[list[Date, int, <span class="pre">...]]</span></tt>.</p>
 <pre class="literal-block">
-def pivot_for_csv(good_events: List[Event], count_iter: Dict):
+def pivot_for_csv(good_events: list[Event], count_iter: Iterator[Tuple[Date, Counter[Event]]]) -&gt; Iterator[list[Union[Date, int]]]:
     &quot;&quot;&quot;Flatten for CSV output.
     &quot;&quot;&quot;
     return (
-        [date] + [counts.get(event_type, 0) for event_type in good_events]
+        cast(List[Union[Date, int]], [date]) + [counts.get(event_type, 0) for event_type in good_events]
         for date, counts in count_iter
     )
 </pre>
@@ -1005,7 +1042,7 @@ Either of which are a problem.</p>
 <pre class="literal-block">
 boards = list(find_board(client, config['board_name']))
 if len(boards) != 1:
-    sys.exit(f&quot;Couldn't find single board {board_name}&quot;)
+    sys.exit(f&quot;Couldn't find single board {config['board_name']}&quot;)
 board = boards[0]
 pprint(board)
 </pre>

@@ -32,12 +32,12 @@ Given a board name, count actions to get a raw "create" and "finish" count.
 
 This involves several kinds of functional-programming mappings.
 
--   From trello document to an internal Action named tuple.
+-   From trello document to an internal Action namedtuple.
 
     This uses a collection of individual functions (some expressed as lambdas)
     to build each attribute of the ``Action`` object.
 
--   Some lists are filtered to exclude them.
+-   Some lists are filtered to exclude contents of the list.
 
     This uses a collection of individual functions to determine which lists
     to pass and which to reject. The idea is that a simple list of functions
@@ -76,7 +76,7 @@ This tabular pivot is helpful for graphing and subsequent decision support.
 #
 # Boards have actions. They also have lists.
 # 
-# Often, the have distinct semantics. We recognize three kinds of lists.
+# Often, lists have distinct semantics. We recognize three kinds of lists.
 #
 # -  Reference data or Ungroomed Backlog. 
 #    The cards in these lists are neither stories nor tasks.
@@ -89,9 +89,6 @@ This tabular pivot is helpful for graphing and subsequent decision support.
 #    This gives the "starting" rate. 
 #
 # The point, after all this analysis, is to stop starting and start finishing.
-
-from trello import TrelloClient
-from trello.board import Board
 
 # Imports
 # ========
@@ -108,11 +105,24 @@ from pprint import pprint
 import re
 import sys
 
-# We'll use some type hints. We haven't provided complete
-# type hinting because it's a little difficult to define some 
-# of the more complex functions.
+# We'll use some type hints to get to a successfully strict
+# set of hints.
 
-from typing import (List, Dict, Iterator, List, Tuple, Callable, Union, NewType)
+from typing import (
+    List, Dict, Tuple,
+    Iterator, Iterable, Callable, Union, NewType, Any,
+    TypeVar,
+    Callable,
+    DefaultDict,
+    NamedTuple,
+    cast,
+)
+
+# The Trello libraries. These lack hints.
+
+from trello import TrelloClient  # type: ignore [import]
+from trello.board import Board  # type: ignore [import]
+
 
 # Here are a few functions to help with functional programming.
 #
@@ -120,11 +130,13 @@ from typing import (List, Dict, Iterator, List, Tuple, Callable, Union, NewType)
 # item from an iterable. This seems better than using 
 # ``itertools.take(1, iterable)``
 
-first = lambda iterable: next(iterable)
+T_ = TypeVar("T_")
+
+first: Callable[[Iterator[T_]], T_] = lambda iterable: next(iterable)
 
 # Another function to slightly simplify filtering data.
 
-non_none = lambda iterable: filter(None, iterable)
+non_none: Callable[[Iterable[T_]], Iterator[T_]] = lambda iterable: filter(None, iterable)
 
 # Parse a Configuration File
 # ==========================
@@ -154,7 +166,7 @@ non_none = lambda iterable: filter(None, iterable)
 #
 # ..  code:: bash
 #
-#     $ python3.6 -m trello.util
+#     $ python3 -m trello.util
 #
 # This command requires the ``TRELLO_API_KEY`` and ``TRELLO_API_SECRET``
 # as environment variables. We could set the manually, but
@@ -176,7 +188,7 @@ def get_config(config_text: str) -> Dict[str, str]:
     line_pat = re.compile(r'(?:export\s+)?(\w+)=(.*)')
     matches = map(line_pat.match, config_text.splitlines())
     config = {
-        m.group(1): m.group(2) for m in matches
+        m.group(1): m.group(2) for m in matches if m
     }
     return config
     
@@ -200,18 +212,18 @@ def get_config(config_text: str) -> Dict[str, str]:
 #
 # Get a list of all boards accessible with the given credentials.
 
-def board_list(client: TrelloClient):
+def board_list(client: TrelloClient) -> None:
     """
     Given the client, print all boards.
     
     :param client: The connected TrelloClient instance.
     """
     for b in client.list_boards():
-        print(n.name)
+        print(b.name)
 
 # Get a list of all lists on a given board.
 
-def list_list(client: TrelloClient, board_name: str):
+def list_list(client: TrelloClient, board_name: str) -> None:
     """
     Given a client and a board name, print all lists on that board.
 
@@ -255,17 +267,17 @@ def find_board(client: TrelloClient, name: str) -> Iterator[Board]:
 # We also include the original ("raw") action document as an aid for
 # debugging.
 
-Action = namedtuple('Action', ['date', 'action', 'card', 'list', 'raw'])
+class Action(NamedTuple):
+    date: datetime.date
+    action: str
+    card: str
+    list: str
+    raw: dict[str, Any]
 
 # We've made them namedtuples because they're immutable. They expose
 # certain data attributes. 
-#
-# Why not use a class with ``@property`` methods to compute derived values?
-#
-# Good question. That's an elegant alternative. 
-#
-# However, the immutability of the tuple is appealing. This is not stateful
-# data. It's a historical record. For this kind of analysis, a simple ``map()``
+# This is not stateful data.
+# It's a historical record. For this kind of analysis, a simple ``map()``
 # to transform source documents to ``Action`` instances seems like the ideal
 # solution.
 #
@@ -289,7 +301,7 @@ Action = namedtuple('Action', ['date', 'action', 'card', 'list', 'raw'])
 #   a local date.
 
 UTC_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
-make_action_date = (lambda document:
+make_action_date: Callable[[dict[str, str]], datetime.date] = (lambda document:
     datetime.datetime
     .strptime(document['date'], UTC_FORMAT)
     .replace(tzinfo=datetime.timezone.utc)
@@ -298,12 +310,12 @@ make_action_date = (lambda document:
     
 # - **action**. A copy of a field without any transformation.
 
-make_action_action = lambda document: document['type']
+make_action_action: Callable[[dict[str, str]], str] = lambda document: document['type']
 
 # - **card**.  The name or the ID of a card. Not all cards have names. 
 #   This is confusing as a lambda. So it's defined as a function.
 
-def make_action_card(document : Dict) -> bool:
+def make_action_card(document : dict[str, dict[str, dict[str, str]]]) -> str:
     if 'name' in document['data']['card']:
         # Creates/Moves
         return document['data']['card']['name']
@@ -317,14 +329,20 @@ def make_action_card(document : Dict) -> bool:
 #   Since the entire document is available, we could use ``document['type']`` 
 #   to distinguish the two cases. It's simpler, however, to simply look in
 #   all of the usual places for the information, since there are only two choices.
+#
+#   It's unclear what other actions we need to process; we'll consider the others
+#   as uniformly ``False``.
 
-def make_action_list(document : Dict) -> bool:
+def make_action_list(document : dict[str, dict[str, dict[str, str]]]) -> str:
     if 'list' in document['data']:
         # Creates/Deletes
         return document['data']['list']['name']
     elif 'listAfter' in document['data']:
         # Moves
         return document['data']['listAfter']['name']
+    else:
+        # Perhaps we should raise an exception?
+        return ""
         
 # We'll use all of these field-level transformation functions to generate
 # the required ``Action`` instance. 
@@ -345,7 +363,7 @@ def make_action_list(document : Dict) -> bool:
 # from the ``Action`` namedtuple is paired with a function that
 # builds that field from the source document.
 
-ACTION_FIELD_MAP = {
+ACTION_FIELD_MAP: dict[str, Callable[..., Any]] = {
     'date': make_action_date,
     'action': make_action_action,
     'card': make_action_card,
@@ -361,7 +379,10 @@ ACTION_FIELD_MAP = {
 # Given this set of fields, we can then apply each
 # function to the source document and build an Action instance.
 
-def make_action(raw_action : Dict) -> Action:
+# This is sometimes implemented as a static method of the ``Action`` class.
+# It's also sometimes implemented as a ``__post_init__()`` method of a dataclass.
+
+def make_action(raw_action : dict[str, Any]) -> Action:
     return Action(
         **{field: transform(raw_action) for field, transform in ACTION_FIELD_MAP.items()}
     )
@@ -376,13 +397,10 @@ def make_action(raw_action : Dict) -> Action:
 #
 # 4. We transform this into an ``Action`` instance.
 #
-# This function could be restated as ``lambda raw_action: Action(**{...})``. 
-#
-# The useful sequence of ``Action`` instances is a mapping of the
-# ``make_action`` function to the source of action documents from the 
-# Trello board.
+# The point behind this function is to apply it to a board to
+# emit ``Action`` documents for analysis.
 
-def action_iter(board: Board, actions: List[str], limit=100) -> Iterator[Action]:
+def action_iter(board: Board, actions: list[str], limit: int = 100) -> Iterator[Action]:
     """
     Iterate over all matching actions on this board.
 
@@ -468,7 +486,7 @@ Event = Enum('Event', ['ignore', 'create', 'remove', 'finish'])
 #
 # We'll parse the action from the query-sting version of an action type.
 
-parse_action = lambda type_text: type_text.partition(':')[0]
+parse_action: Callable[[str], str] = lambda type_text: type_text.partition(':')[0]
 
 #
 # ..  code:: python
@@ -526,43 +544,52 @@ parse_action = lambda type_text: type_text.partition(':')[0]
 # This first-wave function is subsequently applied to the ``action`` argument 
 # for filtering or mapping to an event type.
 #
+
+# Some of the rule types require the run-time input of the specific
+# lists which count as finished. We do this last-minute binding in a function
+# that emits a list of rules, some of which have the list names injected into them.
+
+Match_Args = Union[Tuple[str], Tuple[str, List[str]]]
+Filter_Action = Callable[[Action], bool]
+Match_Rule = Union[
+    Callable[[str], Filter_Action],
+    Callable[[str, List[str]], Filter_Action],
+]
+
+# While this would be pleasant, it doesn't work:
+#     ``Match_Rule = Callable[[*Match_Args], Filter_Action]``
+
+Classifier_Rule_List = List[Tuple[Match_Rule, Match_Args, Event]]
+
+# This was once part of the code, but appears not used... ``Match_Action = Callable[[Action], Event]``.
+
 # There are several rule types:
 
 # - Matches if the text of the action type matches the ``Action.action`` field.
 
-MATCH_ACTION_TYPE = lambda type_text: lambda action: action.action == type_text
+MATCH_ACTION_TYPE: Match_Rule = lambda type_text: lambda action: action.action == type_text
 
 # - Matches if the ``Action.list`` field is in the target lists.
 
-MATCH_IN_LIST = lambda list_names: lambda action: action.list in list_names
+MATCH_IN_LIST: Match_Rule = lambda list_names: lambda action: action.list in list_names
 
 # - Matches if the ``Action.list`` field is not in the target lists.
 
-MATCH_NOT_LIST = lambda list_names: lambda action: action.list not in list_names
+MATCH_NOT_LIST: Match_Rule = lambda list_names: lambda action: action.list not in list_names
     
 # - Matches if the ``Action.action`` text and the ``Action.list`` is in the target lists.
 
-MATCH_ACTION_TYPE_IN_LIST = (lambda type_text, list_names: 
+MATCH_ACTION_TYPE_IN_LIST: Match_Rule = (lambda type_text, list_names:
     lambda action: action.action == parse_action(type_text) and action.list in list_names
     )
     
 # - Matches if the ``Action.action`` text and the ``Action.list`` is not in the target lists.
 
-MATCH_ACTION_TYPE_NOT_LIST = (lambda type_text, list_names: 
+MATCH_ACTION_TYPE_NOT_LIST: Match_Rule = (lambda type_text, list_names:
     lambda action: action.action == parse_action(type_text) and action.list not in list_names
     )
 
-# Some of the above rule types require the run-time input of the specific
-# lists which count as finished. We do this last-minute binding in a function
-# that emits a list of rules, some of which have the list names injected into them.
-
-Match_Args = Union[Tuple[str], Tuple[str, List[str]]]
-Match_Action = Callable[[Action], Event]
-Match_Rule = Callable[[Match_Args], Match_Action]
-
-Classifier_Rule_List = List[Tuple[Match_Rule, Match_Args, Event]]
-
-def build_action_event_rules(finished_lists: List[str]) -> Classifier_Rule_List:
+def build_action_event_rules(finished_lists: list[str]) -> Classifier_Rule_List:
     """
     Build the Action->Event mapping rules. This requires injecting
     the finished list into the rules.
@@ -640,13 +667,24 @@ def build_action_event_rules(finished_lists: List[str]) -> Classifier_Rule_List:
 #
 # We can think about this as rejecting certain lists.
 # Or we can think about passing all lists which are not those reject lists.
-    
-Pass_Rule_List = List[Tuple[Match_Rule, Tuple[List[str]]]]
+#
+# We'll use type hints similar to the Match_Rule hints. These are somewhat
+# simpler in that we don't have a query string, merely a list of list names.
+#
+# So far, there's only one rule. The generalization of this one rule
+# seems like quite a bit of overhead. It allows flexibility, and it
+# reveals some paralellisms between filtering and transforming ``Action`` instances.
 
-def build_pass_rules(reject_lists: List[str]) -> Pass_Rule_List:
+Pass_Args = Tuple[List[str]]
+Pass_Rule = Callable[[List[str]], Filter_Action]
+
+Pass_Rule_List = List[Tuple[Pass_Rule, Pass_Args]]
+
+def build_pass_rules(reject_lists: list[str]) -> Pass_Rule_List:
     """
     Build the Action rejection rules. This requires injecting
-    the reject list into the rules.
+    the reject list into each rule to create a partial function.
+    The function can then be applied to the ``Action``.
     
     The idea is that **all** rules must return True to process the row
     further. Any False is rejection.
@@ -655,7 +693,7 @@ def build_pass_rules(reject_lists: List[str]) -> Pass_Rule_List:
     :returns: sequence of two-tuples with rule function, configuration args.
     """
     return [
-        (MATCH_NOT_LIST, (reject_lists,)),
+        (cast(Pass_Rule, MATCH_NOT_LIST), (reject_lists,)),
     ]
 
 # We might have several criteria required for passing.
@@ -708,10 +746,11 @@ def action_event_iter(pass_rules: Pass_Rule_List,
     :returns: Iterator over (date, event type, action) triples.
     """    
     # Remove the cards on any of the reject lists.
-    pass_filter = lambda action: all(rule_type(*args)(action) for rule_type, args in pass_rules)
+    rule_partials = (rule_type(*args) for rule_type, args in pass_rules)
+    pass_filter: Callable[[Action], bool] = lambda action: all(rule(action) for rule in rule_partials)
             
     # Create a list of (date, event) pairs for each rule that matches.
-    # Ideally, only one item in the list, and we take that one item.
+    # Ideally, there's exactly one item in the list, and we take that one item.
     # Since 0 or many matches are problems, a variation on :func:`first` might be appropriate.
     classify = (lambda action: 
         first(
@@ -805,7 +844,7 @@ def action_event_iter(pass_rules: Pass_Rule_List,
 # The first step in creating the desired data is to rearrange the ``Counter`` object.
 # We want to go from ``Dict[Tuple[Date, Event], int]`` to ``Dict[Date, Dict[Event, int]]``.
 
-def date_by_event(counts: Counter) -> Dict:
+def date_by_event(counts: Counter[tuple[Date, Event]]) -> DefaultDict[Date, dict[Event, int]]:
     """
     Normalize to date, and counts for each event type on that date.
     
@@ -813,7 +852,7 @@ def date_by_event(counts: Counter) -> Dict:
     :returns: dictionary by date. Each value is a dictionary 
         of {event: count, event: count, ...}
     """
-    by_date = defaultdict(lambda: defaultdict(int))
+    by_date: DefaultDict[Date, dict[Event, int]] = defaultdict(lambda: defaultdict(int))
     for date, event in counts:
         by_date[date][event] = counts[date, event]
     return by_date
@@ -852,7 +891,7 @@ def date_by_event(counts: Counter) -> Dict:
 # We can formalize the input as ``Dict[Date, Dict[Event, int]]``.
 # The output is ``Iterator[Tuple[Date, Dict[Event, int]]``
 
-def running_count_iter(by_date_counter: Counter) -> Iterator[Tuple[Date, Counter]]:
+def running_count_iter(by_date_counter: Dict[Date, Dict[Event, int]]) -> Iterator[Tuple[Date, Counter[Event]]]:
     """
     Convert dict with date keys and sub-dictionaries by event type into
     a sequence of running totals. The sequence can be used to build a 
@@ -862,7 +901,7 @@ def running_count_iter(by_date_counter: Counter) -> Iterator[Tuple[Date, Counter
     :returns: a flattened sequence of date, running-total values.
         This can be used to build a dictionary or flattened for CSV output.
     """
-    running = Counter()
+    running: Counter[Event] = Counter()
     for d in sorted(by_date_counter):
         for event_type in Event:
             running[event_type] += by_date_counter[d].get(event_type, 0)
@@ -903,13 +942,13 @@ def running_count_iter(by_date_counter: Counter) -> Iterator[Tuple[Date, Counter
 #      [...]
 #
 # Or, more formally, from ``Iterator[Tuple[Date, Dict[Event, int]]`` to
-# ``Iterator[Tuple[Date, int, ...]]``.
+# ``Iterator[list[Date, int, ...]]``.
 
-def pivot_for_csv(good_events: List[Event], count_iter: Dict):
+def pivot_for_csv(good_events: list[Event], count_iter: Iterator[Tuple[Date, Counter[Event]]]) -> Iterator[list[Union[Date, int]]]:
     """Flatten for CSV output.
     """
     return (
-        [date] + [counts.get(event_type, 0) for event_type in good_events]
+        cast(List[Union[Date, int]], [date]) + [counts.get(event_type, 0) for event_type in good_events]
         for date, counts in count_iter
     )
 
@@ -990,7 +1029,7 @@ if __name__ == "__main__":
 
     boards = list(find_board(client, config['board_name']))
     if len(boards) != 1:
-        sys.exit(f"Couldn't find single board {board_name}")
+        sys.exit(f"Couldn't find single board {config['board_name']}")
     board = boards[0]
     pprint(board)
         
